@@ -420,7 +420,7 @@ public class TournamentWindow : Window
                 if (ImGui.SmallButton($"{cm.Name}##CM{i}"))
                     ChatSender.Send($"{cmd} {msg}");
                 ImGui.PopStyleColor(3);
-                if (ImGui.IsItemHovered()) ImGui.SetTooltip($"/say {msg}");
+                if (ImGui.IsItemHovered()) ImGui.SetTooltip($"{cmd} {msg}");
                 ImGui.SameLine();
                 if (ImGui.SmallButton($"📋##CMc{i}"))
                     ImGui.SetClipboardText(msg);
@@ -521,7 +521,16 @@ public class TournamentWindow : Window
             if (ImGui.SmallButton("⟳ Resync"))
                 relay.ResyncBroadcast(t);
             if (ImGui.IsItemHovered())
-                ImGui.SetTooltip("Re-broadcast full bracket for late joiners\n(sends several /say messages)");
+                ImGui.SetTooltip("Re-broadcast full bracket for late joiners\n(sends 3–4 compressed /say messages)");
+
+            ImGui.SameLine();
+            bool broadcastToChat = relay.BroadcastToChat;
+            if (ImGui.Checkbox("📡/say##RelayChat", ref broadcastToChat))
+                relay.BroadcastToChat = broadcastToChat;
+            if (ImGui.IsItemHovered())
+                ImGui.SetTooltip(
+                    "Broadcast bracket updates via /say (required for in-game spectators)\n" +
+                    "Uncheck to use web viewer only — no /say messages will appear in chat");
 
             ImGui.SameLine();
             ImGui.PushStyleColor(ImGuiCol.Button,        Theme.ToU32(Theme.Danger with { W = 0.18f }));

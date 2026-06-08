@@ -9,6 +9,9 @@
 !/Services/
 !/Windows/
 
+# Allow GitHub Actions
+!/.github/
+
 # Allow only specific root files
 !/Plugin.cs
 !/Configuration.cs

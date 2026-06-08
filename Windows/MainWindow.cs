@@ -1268,25 +1268,32 @@ public class MainWindow : Window
 
             case 8: // Relay System
                 SectionHeader("Relay System");
-                Body("The relay broadcasts your live bracket to spectators via /say so anyone at the venue can follow along without running the plugin themselves.");
+                Body("The relay keeps your live bracket in sync with spectators in two ways: encoded /say messages for in-game followers, and a live web viewer at tometools.com for anyone online.");
                 Gap();
                 SectionHeader("Hosting");
                 Bullet("Click Start Relay in the Tournament window. A 6-character code is generated.");
-                Bullet("Share the code with spectators, or share the web viewer link: tometools.com/bracket?code=XXXXXX");
-                Bullet("⟳ Resync — re-broadcasts the full bracket for anyone who joined late or missed messages. Sends 3–4 compressed messages regardless of bracket size.");
-                Bullet("Stop Relay — sends an END signal to spectators.");
+                Bullet("Share the code with in-game spectators, or share the web link: tometools.com/bracket?code=XXXXXX");
+                Bullet("⟳ Resync — re-sends the full bracket for late joiners. Sends 3–4 compressed /say messages regardless of bracket size or how far the tournament has progressed.");
+                Bullet("Stop Relay — drops the send queue and sends an END signal immediately.");
+                Gap();
+                SectionHeader("Broadcast via /say (checkbox next to ⟳ Resync)");
+                Body("When checked, bracket updates are broadcast via encoded /say messages — this is what allows in-game spectators to join with a code. The encoded text in chat is the relay system working as intended.");
+                Body("Uncheck to disable /say broadcasting entirely. No relay messages appear in chat. Spectators use the tometools.com web link instead.");
+                Gap();
+                SectionHeader("Rate limiting");
+                Body("FFXIV caps /say send speed. The relay queues one message per second so nothing is lost. A full resync for a 32-player bracket takes around 5 seconds to finish.");
                 Gap();
                 SectionHeader("Spectating In-Game");
                 Bullet("Enter the 6-character code in the Tournament window relay section.");
                 Bullet("The bracket appears read-only and updates in real time as each match completes.");
-                Bullet("Click Leave to stop following.");
+                Bullet("Click Leave to stop following. Ask the host to press ⟳ Resync if the tournament is already in progress when you join.");
                 Gap();
                 SectionHeader("Web Viewer");
-                Body("tometools.com/bracket?code=XXXXXX shows the full bracket in a browser — no plugin required. Updates every 5 seconds. Works on mobile too.");
+                Body("tometools.com/bracket?code=XXXXXX shows the full bracket in a browser — no plugin required. Updates every 5 seconds. Works on mobile and is ideal for streaming.");
                 Gap();
                 SectionHeader("Notes");
-                Body("The relay protocol always uses /say — this is fixed. MC announcement buttons (call-up, roll-off, winner) use the MC channel set in Settings or in the MC Controls dropdown, which can be different.");
-                Body("Messages are tied to the first sender detected. Anyone else sending a matching code is silently ignored, preventing bracket spoofing.");
+                Body("MC announcement buttons (call-up, roll-off, winner) are separate from the relay and use the channel set in MC Controls (Say, Yell, Shout, Party, FC). The relay always uses /say.");
+                Body("Relay messages are tied to the first sender detected. Others sending the same code are silently ignored — this prevents bracket spoofing.");
                 break;
 
             case 9: // Settings

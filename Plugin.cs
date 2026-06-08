@@ -16,7 +16,8 @@ public sealed class Plugin : IDalamudPlugin
     [PluginService] internal static IChatGui ChatGui { get; private set; } = null!;
     [PluginService] internal static IClientState ClientState { get; private set; } = null!;
     [PluginService] internal static IPlayerState PlayerState { get; private set; } = null!;
-    [PluginService] internal static IPluginLog Log { get; private set; } = null!;
+    [PluginService] internal static IPluginLog  Log       { get; private set; } = null!;
+    [PluginService] internal static IFramework Framework  { get; private set; } = null!;
 
     public readonly Configuration           Configuration;
     public readonly GameStateService        GameState;
@@ -37,7 +38,7 @@ public sealed class Plugin : IDalamudPlugin
         GameState         = new GameStateService(Configuration, Log);
         ChatMonitor       = new ChatMonitorService(ChatGui, GameState, Configuration, Log);
         TournamentService = new TournamentService(GameState, Log);
-        RelayService      = new TournamentRelayService(ChatGui, Log);
+        RelayService      = new TournamentRelayService(ChatGui, Log, Framework);
         BattleRenderer    = new BattleRenderer(GameState);
 
         // Keep relay in sync with tournament state: send match results as they happen,

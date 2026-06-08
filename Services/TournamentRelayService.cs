@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
 using System.IO.Compression;
@@ -24,10 +25,20 @@ public class TournamentRelayService : IDisposable
 {
     private readonly IChatGui    chatGui;
     private readonly IPluginLog  log;
+    private readonly IFramework  _framework;
     private readonly HttpClient  _httpClient = new()
     {
         Timeout = TimeSpan.FromSeconds(10),
     };
+
+    // Rate-limited /say queue — one message per second to respect FFXIV chat caps.
+    // ConcurrentQueue because Draw() (render thread) enqueues while IFramework.Update
+    // (game thread) dequeues — they run on different threads in Dalamud.
+    private readonly ConcurrentQueue<string> _chatQueue = new();
+    private long _lastSendMs = 0;
+
+    /// <summary>When false, in-game /say broadcast is skipped (web sync still happens).</summary>
+    public bool BroadcastToChat { get; set; } = true;
 
     // ── Protocol ──────────────────────────────────────────────────────────
     // Messages look like:  [DR·A3F9K2·V1·EVENT·arg1·arg2·...]
@@ -78,17 +89,36 @@ public class TournamentRelayService : IDisposable
     // ── Events ────────────────────────────────────────────────────────────
     public event Action? RelayStateChanged;
 
-    public TournamentRelayService(IChatGui chatGui, IPluginLog log)
+    public TournamentRelayService(IChatGui chatGui, IPluginLog log, IFramework framework)
     {
-        this.chatGui = chatGui;
-        this.log     = log;
-        chatGui.ChatMessage += OnChatMessage;
+        this.chatGui  = chatGui;
+        this.log      = log;
+        _framework    = framework;
+        chatGui.ChatMessage  += OnChatMessage;
+        framework.Update     += OnFrameworkUpdate;
     }
 
     public void Dispose()
     {
-        chatGui.ChatMessage -= OnChatMessage;
+        _framework.Update    -= OnFrameworkUpdate;
+        chatGui.ChatMessage  -= OnChatMessage;
         _httpClient.Dispose();
+    }
+
+    // Drains one queued /say message per second on the game thread.
+    private void OnFrameworkUpdate(IFramework _)
+    {
+        if (_chatQueue.IsEmpty) return;
+        long now = Environment.TickCount64;
+        if (now - _lastSendMs < 1100) return;
+        if (!_chatQueue.TryDequeue(out var msg)) return;
+        _lastSendMs = now;
+        ChatSender.Send(msg);
+    }
+
+    private void ClearChatQueue()
+    {
+        while (_chatQueue.TryDequeue(out _)) { }
     }
 
     // ── Host API ──────────────────────────────────────────────────────────
@@ -108,11 +138,13 @@ public class TournamentRelayService : IDisposable
     public void StopHostRelay()
     {
         if (!IsHosting) return;
-        SendRelayMessage("END");
+        ClearChatQueue(); // drop any pending queued messages
+        var endMsg = $"/say [DR{Sep}{RelayCode}{Sep}V1{Sep}END]";
         RelayCode        = null;
         _writeToken      = null;
         _champBroadcast  = false;
         _broadcastMatches.Clear();
+        ChatSender.Send(endMsg); // send END immediately on the game thread
         log.Information("[DR Relay] Relay stopped");
         RelayStateChanged?.Invoke();
     }
@@ -121,6 +153,7 @@ public class TournamentRelayService : IDisposable
     public void ResyncBroadcast(Tournament t)
     {
         if (!IsHosting) return;
+        ClearChatQueue(); // drop any pending incremental messages; send a clean full state
         log.Information("[DR Relay] Resync broadcast");
         SendBracketSync(t);
         _ = SyncToWebAsync(t);
@@ -495,8 +528,8 @@ public class TournamentRelayService : IDisposable
 
     private void SendRelayMessage(string payload)
     {
-        if (!IsHosting) return;
-        ChatSender.Send($"/say [DR{Sep}{RelayCode}{Sep}V1{Sep}{payload}]");
+        if (!IsHosting || !BroadcastToChat) return;
+        _chatQueue.Enqueue($"/say [DR{Sep}{RelayCode}{Sep}V1{Sep}{payload}]");
     }
 
     private static string Sanitize(string? s) => (s ?? string.Empty).Replace(Sep, '-');
