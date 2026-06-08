@@ -12,5 +12,10 @@
 
   <ItemGroup>
     <Compile Remove="Dalamud Dev Info\**" />
+    <Compile Remove="Dalamud Dev Info - GIT IGNORE\**" />
+    <Compile Remove="_backups*\**" />
+    <Compile Remove="Deathroll_Manager\**" />
+    <Compile Remove="scratch\**" />
+    <Compile Remove="Toolkit*\**" />
   </ItemGroup>
 </Project>
