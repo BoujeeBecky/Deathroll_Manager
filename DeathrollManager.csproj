@@ -1,0 +1,16 @@
+<Project Sdk="Dalamud.NET.Sdk/15.0.0">
+  <PropertyGroup>
+    <Version>1.0.0</Version>
+    <Name>Deathroll Manager</Name>
+    <Author>Boujee Becky</Author>
+    <Punchline>Track and run Deathroll games at FFXIV venues with live danger meters, battle animations, and tournament brackets.</Punchline>
+    <Description>Track live Deathroll games with a real-time danger meter and animated stick-figure battle scene. Run full tournaments with single or double elimination brackets in V-bracket or left-to-right layouts. The relay system broadcasts your bracket to spectators via /say with a 6-character code and syncs live to a web viewer at tometools.com/bracket — no plugin required for spectators. Venue-tagged leaderboards track wins, losses, net gil, and win rates across all your events. Roll button auto-sends /random when it is your turn. Games and history persist between sessions.</Description>
+    <Tags>deathroll,venue,gambling,game,tracker,tournament,bracket,relay,leaderboard,battle</Tags>
+    <RootNamespace>DeathrollManager</RootNamespace>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Remove="Dalamud Dev Info\**" />
+  </ItemGroup>
+</Project>

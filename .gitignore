@@ -1,0 +1,19 @@
+# Ignore everything by default
+/*
+!/.gitignore
+!/.gitattributes
+
+# Allow only plugin source folders
+!/Helpers/
+!/Models/
+!/Services/
+!/Windows/
+
+# Allow only specific root files
+!/Plugin.cs
+!/Configuration.cs
+!/DeathrollManager.csproj
+!/plugin.json
+!/pluginmaster.json
+!/README.md
+!/Icon.png
