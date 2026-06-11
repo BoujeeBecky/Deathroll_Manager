@@ -4,7 +4,7 @@
   "Punchline": "Track and run Deathroll games at FFXIV venues with live danger meters, battle animations, and tournament brackets.",
   "Description": "Track live Deathroll games with a real-time danger meter and animated stick-figure battle scene. Run full tournaments with single or double elimination brackets in V-bracket or left-to-right layouts. The relay system broadcasts your bracket to spectators via /say with a 6-character code and syncs live to a web viewer at tometools.com/bracket — no plugin required for spectators. Venue-tagged leaderboards track wins, losses, net gil, and win rates across all your events. Roll button auto-sends /random when it is your turn. Games and history persist between sessions.",
   "InternalName": "DeathrollManager",
-  "AssemblyVersion": "1.0.1.0",
+  "AssemblyVersion": "1.1.0.0",
   "RepoUrl": "https://github.com/BoujeeBecky/Deathroll_Manager",
   "Tags": ["deathroll", "venue", "gambling", "game", "tracker", "tournament", "bracket", "relay", "leaderboard", "battle"],
   "CategoryTags": ["Tools"],
@@ -12,5 +12,5 @@
   "IsTestingExclusive": false,
   "ApiLevel": 9,
   "IconUrl": "https://tometools.com/shared/icons/DeathrollManagerIcon.png",
-  "Changelog": "v1.0.1 — Relay /say messages are now rate-limited (1 per second) to prevent FFXIV chat spam drops. Added 'Broadcast via /say' checkbox to disable in-game relay and use web viewer only. Updated Help tab relay documentation. MC announcement channel now shows correctly in custom macro tooltips."
+  "Changelog": "v1.1.0 — Tournament hosting overhaul from live-event feedback! Roll-off now detects /random 10s with first-name matching. Pick the first roller manually or cancel a stuck roll-off (Start Match can no longer lock up). Either player may open a match — turn order self-corrects. Manual roll entry for rolls chat detection missed (Game tab + MC Controls). Undo/Redo up to 10 rolls, plus reopen a just-ended game. New 📜 Full Report popup shows every match and roll with copy/export; copy buttons added to match details and History. Fixed Copy Results exporting nothing for double-elimination brackets."
 }

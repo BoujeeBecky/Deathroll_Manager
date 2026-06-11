@@ -62,6 +62,10 @@ public class TournamentWindow : Window
     // ── Match detail popup ────────────────────────────────────────────────
     private TournamentMatch? pendingDetailMatch;
 
+    // ── Full report popup ─────────────────────────────────────────────────
+    private string _reportText      = string.Empty;
+    private bool   _openReportPopup;
+
     // ── Default announcement macro templates ─────────────────────────────
     // Placeholders: {p1} {p2} {start} {first} {winner} {round} {match} {venue}
     private const string MacroCallUp     = "Next up: {p1} vs {p2}! Please make your way to the front.";
@@ -89,7 +93,6 @@ public class TournamentWindow : Window
             MaximumSize = new(1600, 1000),
         };
 
-        TournamentSvc.TournamentStateChanged += () => { };
     }
 
     public override void Draw()
@@ -136,6 +139,7 @@ public class TournamentWindow : Window
         ImGui.Spacing();
         DrawRollFeed(t);
         DrawMatchDetailPopup();
+        DrawFullReportPopup();
     }
 
     // ── Header ────────────────────────────────────────────────────────────
@@ -182,6 +186,15 @@ public class TournamentWindow : Window
         if (ImGui.SmallButton("Copy Results"))
             ImGui.SetClipboardText(TournamentSvc.ExportBracketText());
         if (ImGui.IsItemHovered()) ImGui.SetTooltip("Copy bracket to clipboard (paste in Discord/chat)");
+
+        ImGui.SameLine();
+        if (ImGui.SmallButton("📜 Full Report"))
+        {
+            _reportText      = TournamentSvc.ExportFullReport();
+            _openReportPopup = true;
+        }
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip("Review every match with its complete roll history\n— copy or export if the bracket needs fixing up");
 
         ImGui.SameLine();
         if (ImGui.SmallButton("Cancel Tournament"))
@@ -256,7 +269,7 @@ public class TournamentWindow : Window
                 ImGui.PushStyleColor(ImGuiCol.ButtonHovered, Theme.ToU32(Theme.Gold with { W = 0.40f }));
                 ImGui.PushStyleColor(ImGuiCol.ButtonActive,  Theme.ToU32(Theme.Gold with { W = 0.55f }));
                 if (ImGui.SmallButton("⚔ Start Match"))
-                    TournamentSvc.StartCurrentMatch();
+                    TournamentSvc.StartCurrentMatch(TournamentSvc.RollOffFirstRoller);
                 ImGui.PopStyleColor(3);
             }
         }
@@ -335,7 +348,7 @@ public class TournamentWindow : Window
             svc.StartRollOff(match!);
         });
         if (ImGui.IsItemHovered() && canRollOff)
-            ImGui.SetTooltip("Sends /say announcement and arms auto-detection\n(watches for both players to /random 10)");
+            ImGui.SetTooltip("Sends the announcement and arms auto-detection\n(watches for both players to /random 10).\nYou can also just pick who rolls first below.");
         ImGui.SameLine();
         if (ImGui.SmallButton("📋##ROcopy") && canRollOff)
             ImGui.SetClipboardText(FormatMacro(MacroRollOff, match, t));
@@ -362,6 +375,27 @@ public class TournamentWindow : Window
                 ImGui.TextColored(Theme.Muted, $"  {svc.RollOffP1}: {p1s}    {svc.RollOffP2}: {p2s}");
             }
             ImGui.Spacing();
+        }
+
+        // ── First-roller pick (manual override) ──────────────────────────
+        // Always available pre-match: if roll-off auto-detection misses the 10s
+        // (or no roll-off was held), the host just clicks who goes first.
+        if (hasMatch && match!.Status == MatchStatus.Pending)
+        {
+            ImGui.TextColored(Theme.Muted, "First roller:");
+            ImGui.SameLine();
+            DrawFirstRollerPick(svc, match, match.Player1!, Theme.Player1);
+            ImGui.SameLine();
+            DrawFirstRollerPick(svc, match, match.Player2!, Theme.Player2);
+
+            if (svc.IsRollOffActive)
+            {
+                ImGui.SameLine();
+                if (ImGui.SmallButton("✕ Cancel roll-off##ROCancel"))
+                    svc.CancelRollOff();
+                if (ImGui.IsItemHovered())
+                    ImGui.SetTooltip("Clear the roll-off and re-enable Start Match");
+            }
         }
 
         // ── Row 2: Start Match | Announce Winner ──────────────────────────
@@ -401,6 +435,13 @@ public class TournamentWindow : Window
             ImGui.SetClipboardText(FormatMacro(MacroWinner, lastDone, t, winner: lastDone?.Winner));
         if (ImGui.IsItemHovered()) ImGui.SetTooltip("Copy to clipboard");
 
+        // ── Manual roll entry for the live match ──────────────────────────
+        if (match?.Status == MatchStatus.InProgress && plugin.GameState.ActiveGame != null)
+        {
+            ImGui.Spacing();
+            ManualRollEntry.Draw(plugin.GameState, "MC");
+        }
+
         // ── Custom macros ─────────────────────────────────────────────────
         var customMacros = plugin.Configuration.AnnouncementMacros;
         if (customMacros.Count > 0)
@@ -430,6 +471,22 @@ public class TournamentWindow : Window
 
         ImGui.Spacing();
         ImGui.TreePop();
+    }
+
+    private static void DrawFirstRollerPick(TournamentService svc, TournamentMatch match,
+        string player, Vector4 color)
+    {
+        bool selected = string.Equals(svc.RollOffFirstRoller, player, StringComparison.OrdinalIgnoreCase);
+        ImGui.PushStyleColor(ImGuiCol.Button,        Theme.ToU32(color with { W = selected ? 0.50f : 0.15f }));
+        ImGui.PushStyleColor(ImGuiCol.ButtonHovered, Theme.ToU32(color with { W = 0.38f }));
+        ImGui.PushStyleColor(ImGuiCol.ButtonActive,  Theme.ToU32(color with { W = 0.55f }));
+        if (ImGui.SmallButton($"{(selected ? "✓ " : "")}{player}##first{player}"))
+            svc.SetRollOffWinner(match, player);
+        ImGui.PopStyleColor(3);
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip(selected
+                ? $"{player} rolls first"
+                : $"Set {player} to roll first (manual roll-off winner)");
     }
 
     private static void MCButton(string label, bool enabled, Vector4 color, Action onClick)
@@ -1606,6 +1663,51 @@ public class TournamentWindow : Window
             pendingDetailMatch = null;
             ImGui.CloseCurrentPopup();
         }
+        ImGui.SameLine();
+        if (ImGui.Button("📋 Copy", new Vector2(90, 0)))
+            ImGui.SetClipboardText(TournamentSvc.ExportMatchText(match));
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip("Copy this match's roll history to clipboard");
+
+        ImGui.EndPopup();
+    }
+
+    // ── Full report popup ─────────────────────────────────────────────────
+
+    private void DrawFullReportPopup()
+    {
+        if (_openReportPopup)
+        {
+            ImGui.OpenPopup("##fullReport");
+            _openReportPopup = false;
+        }
+
+        ImGui.SetNextWindowSize(new Vector2(560, 520), ImGuiCond.Appearing);
+        if (!ImGui.BeginPopup("##fullReport")) return;
+
+        ImGui.TextColored(Theme.Gold, "📜 Full Match Report");
+        ImGui.SameLine();
+        if (ImGui.SmallButton("⟳ Refresh##report"))
+            _reportText = TournamentSvc.ExportFullReport();
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip("Rebuild the report with the latest rolls");
+        ImGui.Separator();
+
+        var textSize = ImGui.GetContentRegionAvail();
+        textSize.Y -= 34f;
+        if (ImGui.BeginChild("##reportText", textSize, true))
+        {
+            ImGui.TextUnformatted(_reportText);
+            ImGui.EndChild();
+        }
+
+        if (ImGui.Button("📋 Copy All", new Vector2(110, 0)))
+            ImGui.SetClipboardText(_reportText);
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip("Copy the entire report to clipboard\n(paste into Discord or a text file to keep a backup)");
+        ImGui.SameLine();
+        if (ImGui.Button("Close", new Vector2(80, 0)))
+            ImGui.CloseCurrentPopup();
 
         ImGui.EndPopup();
     }

@@ -85,7 +85,11 @@ public sealed class Plugin : IDalamudPlugin
     }
 
     private void OnUnmatchedRollForTournament(string player, int rolled, int outOf)
-        => TournamentService.HandleRollOffCandidate(player, rolled, outOf);
+    {
+        // No window-open gate: an armed roll-off must keep consuming /random 10s
+        // even if the host closes the bracket window mid-roll-off.
+        TournamentService.HandleRollOffCandidate(player, rolled, outOf);
+    }
 
     public void Dispose()
     {

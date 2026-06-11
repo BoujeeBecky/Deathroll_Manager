@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Numerics;
+using System.Text;
 using Dalamud.Game.ClientState.Objects.Types;
 using Dalamud.Interface.Windowing;
 using Dalamud.Plugin.Services;
@@ -68,6 +69,8 @@ public class MainWindow : Window
 
     public void OnUnmatchedRoll(string playerName, int rolled, int outOf)
     {
+        if (!IsOpen) return;
+
         // Intercept /random 10 rolls for an active single-match roll-off
         if (_soloRollOffActive && outOf == 10)
         {
@@ -165,6 +168,37 @@ public class MainWindow : Window
         else              DrawStartGamePanel();
     }
 
+    // Offers to reopen the just-finished game in case the final 1 was recorded
+    // by mistake. Only for recent, non-bracket games — tournament results have
+    // already advanced the bracket and must be corrected via right-click there.
+    private void DrawRecentGameUndo()
+    {
+        var hist = GameState.History;
+        if (hist.Count == 0) return;
+
+        var last = hist[0];
+        if (last.Status != GameStatus.Completed || last.CompletedAt == null) return;
+        if ((DateTime.Now - last.CompletedAt.Value).TotalMinutes > 3) return;
+        if (TournamentSvc.IsGameLinkedToBracket(last.Id)) return;
+
+        ImGui.PushStyleColor(ImGuiCol.ChildBg, Theme.ToU32(Theme.CardBg));
+        if (ImGui.BeginChild("##UndoLast", new Vector2(0, 52), true))
+        {
+            ImGui.TextColored(Theme.Muted,
+                $"Last game: {last.WinnerName} beat {last.LoserName} (rolled from {last.StartingNumber:N0})");
+            if (ImGui.SmallButton("↶ Undo final roll — reopen game"))
+            {
+                if (GameState.ReopenLastCompletedGame())
+                    gameOverFlashUntil = 0;
+            }
+            if (ImGui.IsItemHovered())
+                ImGui.SetTooltip("Removes the game from History and resumes it\nwith the final roll taken back");
+            ImGui.EndChild();
+        }
+        ImGui.PopStyleColor();
+        ImGui.Spacing();
+    }
+
     private void DrawGameOverBanner(DeathrollGame game)
     {
         float t          = (float)((gameOverFlashUntil - ImGui.GetTime()) / 3.0);
@@ -237,7 +271,7 @@ public class MainWindow : Window
 
         // Roll history
         ImGui.TextColored(Theme.Gold, "Roll History");
-        float histH = ImGui.GetContentRegionAvail().Y - 32f;
+        float histH = ImGui.GetContentRegionAvail().Y - 60f;
         if (ImGui.BeginChild("##RollHistory", new Vector2(0, histH), true))
         {
             if (game.Rolls.Count == 0)
@@ -266,6 +300,8 @@ public class MainWindow : Window
             }
             ImGui.EndChild();
         }
+
+        ManualRollEntry.Draw(GameState, "Game");
 
         if (ImGui.Button("Abandon Game")) GameState.AbandonGame();
     }
@@ -314,7 +350,7 @@ public class MainWindow : Window
         // Determine if the local player is the one who needs to roll
         var localName = Plugin.PlayerState.CharacterName ?? string.Empty;
         bool isMyTurn = localName.Length > 0 &&
-                        string.Equals(localName, game.CurrentPlayerTurn, StringComparison.OrdinalIgnoreCase);
+                        PlayerNames.Match(localName, game.CurrentPlayerTurn);
 
         float btnW  = 260f;
         float btnH  = 38f;
@@ -385,6 +421,8 @@ public class MainWindow : Window
         ImGui.Spacing();
         CenteredText("No Active Game", Theme.Muted);
         ImGui.Spacing();
+
+        DrawRecentGameUndo();
 
         if (hintPlayer != null)
         {
@@ -564,6 +602,11 @@ public class MainWindow : Window
         }
 
         ImGui.TextColored(Theme.Muted, $"{history.Count} game(s) on record");
+        ImGui.SameLine();
+        if (ImGui.SmallButton("📋 Copy All"))
+            ImGui.SetClipboardText(GameState.ExportHistoryText());
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip("Copy every game's full roll history to clipboard\n(paste into Discord or a text file to keep a backup)");
         ImGui.Spacing();
 
         if (!ImGui.BeginChild("##History", ImGui.GetContentRegionAvail(), false)) return;
@@ -574,6 +617,15 @@ public class MainWindow : Window
             if (!ImGui.CollapsingHeader(label)) continue;
 
             ImGui.Indent(12f);
+            if (ImGui.SmallButton($"📋 Copy##hist{game.Id}"))
+            {
+                var sb = new StringBuilder();
+                GameStateService.AppendGameBlock(sb, game);
+                ImGui.SetClipboardText(sb.ToString());
+            }
+            if (ImGui.IsItemHovered())
+                ImGui.SetTooltip("Copy this game's roll history to clipboard");
+
             if (game.Status == GameStatus.Completed)
             {
                 ImGui.TextColored(Theme.WinGreen, $"🏆 Winner: {game.WinnerName}");
@@ -1168,6 +1220,12 @@ public class MainWindow : Window
                 SectionHeader("During a Game");
                 Body("The danger bar and current max update with each detected roll. When it is your turn a pulsing green Roll button appears — click it to send /random [current max] automatically without typing.");
                 Gap();
+                Body("Either player may roll first — if Player 2 opens the game, the plugin swaps the turn order automatically instead of ignoring the roll.");
+                Gap();
+                Body("Missed a roll? Use the manual entry box below the roll history: type the rolled value and click the player's name to record it by hand. Entering 1 ends the game just like a real roll.");
+                Gap();
+                Body("Recorded something wrong? ↶ Undo removes the last roll and ↷ Redo puts it back — up to 10 steps in either direction. Adding a new roll clears the redo history (the game has moved on). If a game just ended by mistake, the Game tab offers to reopen it for a few minutes — tournament games are excluded, since the bracket has already advanced (use right-click on the match instead).");
+                Gap();
                 Body("Roll history scrolls newest-first. Enable Show Timestamps in Settings to add HH:mm:ss to each entry.");
                 Gap();
                 SectionHeader("Game Over");
@@ -1186,14 +1244,22 @@ public class MainWindow : Window
                 SectionHeader("Running Matches");
                 Body("Click Start Match for the next pending match. This begins a live Deathroll game and the plugin tracks all rolls automatically. When someone rolls 1 the bracket advances — no manual input needed.");
                 Gap();
-                Body("Left-click any completed match to view the full roll-by-roll history. Right-click any match to force a winner (forfeit or no-show).");
+                Body("It does not matter which player actually rolls first — if the second-listed player opens the game, the plugin swaps the turn order on its own.");
+                Gap();
+                Body("Left-click any completed match to view the full roll-by-roll history (with a 📋 Copy button). Right-click any match to force a winner (forfeit or no-show).");
+                Gap();
+                Body("📜 Full Report (next to Copy Results) opens a review window with every match and every roll in plain text — Copy All exports it for safekeeping or for reconstructing a bracket if something goes badly wrong mid-event.");
                 Gap();
                 SectionHeader("MC Controls");
                 Body("The MC Controls panel (in the bracket window) has one-click announcement buttons:");
                 Bullet("Call Up — announce the next two players.");
-                Bullet("Roll Off — prompt both players to /random 10 to decide who rolls first. The plugin reads results from chat automatically.");
-                Bullet("Start Match — announce the starting number and who rolls first.");
+                Bullet("Roll Off — prompt both players to /random 10 to decide who rolls first. The plugin reads the results from chat (first names are enough — bracket names don't need to be full character names).");
+                Bullet("First roller buttons — click a player's name to set who rolls first yourself. Use this if the roll-off 10s weren't picked up, or to skip the roll-off entirely.");
+                Bullet("Cancel roll-off — clears a stuck roll-off and re-enables Start Match.");
+                Bullet("Start Match — announce the starting number and who rolls first (uses the roll-off result or your manual pick).");
                 Bullet("Announce Winner — declare the round winner.");
+                Gap();
+                Body("While a match is live, a manual roll entry box appears in MC Controls: type the rolled value and click the player's name to record any roll chat detection missed. ↶ Undo / ↷ Redo step back and forward through the last 10 rolls if something went in wrong.");
                 Body("Select the announcement channel (Say / Yell / Shout / Party / FC) at the top of MC Controls or in Settings.");
                 break;
 
@@ -1226,6 +1292,8 @@ public class MainWindow : Window
                 Bullet("Bet amount (if any)");
                 Bullet("Starting number, roll count, and match duration");
                 Bullet("Full roll-by-roll breakdown with each player's value and the final 💀 roll");
+                Gap();
+                Body("📋 Copy All (top of the tab) exports the entire history as plain text; each expanded game also has its own 📋 Copy button.");
                 Gap();
                 SectionHeader("What History Drives");
                 Body("History is the single source of truth for Leaderboards, My Stats, and the tournament roll feed. Play a game, finish it — everything updates instantly.");
@@ -1260,7 +1328,11 @@ public class MainWindow : Window
                 SectionHeader("Auto-detect");
                 Body("When a roll comes in, the plugin checks if it matches the active game's expected player and max value. If it does, the roll is added automatically.");
                 Gap();
+                Body("Name matching is lenient: a first name in the bracket matches the full character name in chat. On the very first roll of a game, either player is accepted — turn order self-corrects to whoever actually opened.");
+                Gap();
                 Body("If a roll does not match any active game, the Game tab shows an Unmatched Roll hint with the player name and max pre-filled so you can start tracking in one click.");
+                Gap();
+                Body("If detection ever misses a roll (lag, odd channel, typo'd name), use the manual roll entry box in the Game tab or MC Controls to type it in — the game continues exactly as if it had been detected.");
                 Gap();
                 SectionHeader("Tournament Rolls");
                 Body("During a tournament match, the plugin listens the same way. When the active game ends with a roll of 1 the bracket advances automatically — no button press needed.");

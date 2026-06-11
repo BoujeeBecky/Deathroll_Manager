@@ -20,7 +20,9 @@ public class TournamentMatch
     public bool IsCompleted  => Status == MatchStatus.Completed;
     public bool BothPlayersReady => Player1 != null && Player2 != null && !IsBye;
 
+    // Lenient: a first name in the bracket matches a full character name from chat,
+    // so games started outside the bracket window still link up for auto-advance.
     public bool HasPlayer(string name) =>
-        string.Equals(Player1, name, System.StringComparison.OrdinalIgnoreCase) ||
-        string.Equals(Player2, name, System.StringComparison.OrdinalIgnoreCase);
+        Helpers.PlayerNames.Match(Player1, name) ||
+        Helpers.PlayerNames.Match(Player2, name);
 }

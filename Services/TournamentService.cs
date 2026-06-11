@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Text;
 using Dalamud.Plugin.Services;
+using DeathrollManager.Helpers;
 using DeathrollManager.Models;
 
 namespace DeathrollManager.Services;
@@ -69,8 +70,9 @@ public class TournamentService
     {
         if (!IsRollOffActive || outOf != 10) return false;
 
-        bool isP1 = string.Equals(playerName, RollOffP1, StringComparison.OrdinalIgnoreCase);
-        bool isP2 = string.Equals(playerName, RollOffP2, StringComparison.OrdinalIgnoreCase);
+        // Lenient match — chat reports "First Last" but brackets often hold first names.
+        bool isP1 = PlayerNames.Match(playerName, RollOffP1);
+        bool isP2 = PlayerNames.Match(playerName, RollOffP2);
         if (!isP1 && !isP2) return false;
 
         if (isP1) { RollOffP1Roll = rolled; RollOffTied = false; }
@@ -94,6 +96,25 @@ public class TournamentService
 
         RollOffStateChanged?.Invoke();
         return true;
+    }
+
+    /// <summary>
+    /// Host manually picks who rolls first — works whether or not a roll-off
+    /// announcement was sent (arms the state if needed). Overrides auto-detection.
+    /// </summary>
+    public void SetRollOffWinner(TournamentMatch match, string player)
+    {
+        if (!IsRollOffActive)
+        {
+            RollOffP1     = match.Player1;
+            RollOffP2     = match.Player2;
+            RollOffP1Roll = null;
+            RollOffP2Roll = null;
+        }
+        RollOffFirstRoller = player;
+        RollOffTied        = false;
+        log.Information($"[DeathrollManager] First roller set manually: {player}");
+        RollOffStateChanged?.Invoke();
     }
 
     public void CreateTournament(string name, IList<string> players, int startingNumber, long bet,
@@ -162,6 +183,14 @@ public class TournamentService
         TournamentStateChanged?.Invoke();
     }
 
+    /// <summary>
+    /// True if a completed game is linked to a match in the active bracket.
+    /// Such games must not be reopened — the bracket has already advanced.
+    /// </summary>
+    public bool IsGameLinkedToBracket(Guid gameId) =>
+        ActiveTournament != null &&
+        AllMatches(ActiveTournament).Any(m => m.GameId == gameId);
+
     // ── Manual override ────────────────────────────────────────────────────
 
     public void ForceWinner(TournamentMatch match, string winner)
@@ -228,42 +257,100 @@ public class TournamentService
 
     // ── Bracket text export ───────────────────────────────────────────────
 
-    /// <summary>Builds a plain-text bracket summary suitable for pasting into chat or Discord.</summary>
-    public string ExportBracketText()
+    /// <summary>Plain-text bracket summary suitable for pasting into chat or Discord.</summary>
+    public string ExportBracketText() => BuildReport(includeRolls: false);
+
+    /// <summary>Full match report — every match plus its roll-by-roll history.</summary>
+    public string ExportFullReport() => BuildReport(includeRolls: true);
+
+    /// <summary>One match with its complete roll history as plain text.</summary>
+    public string ExportMatchText(TournamentMatch match)
     {
-        if (ActiveTournament == null) return "(no active tournament)";
-
         var sb = new StringBuilder();
-        sb.AppendLine($"=== {ActiveTournament.Name} ===");
-        sb.AppendLine($"Starting: {ActiveTournament.StartingNumber:N0}" +
-                      (ActiveTournament.BetAmount > 0 ? $"  |  Bet: {ActiveTournament.BetAmount:N0} gil" : ""));
-        sb.AppendLine();
+        if (ActiveTournament != null)
+            sb.AppendLine($"{ActiveTournament.Name} — {MatchLabel(ActiveTournament, match)}");
 
-        for (int r = 0; r < ActiveTournament.Rounds.Count; r++)
+        var game = GetMatchGame(match);
+        if (game == null)
         {
-            bool isFinal = r == ActiveTournament.Rounds.Count - 1;
-            sb.AppendLine(isFinal ? "── Finals ──" : $"── Round {r + 1} ──");
-
-            foreach (var m in ActiveTournament.Rounds[r])
-            {
-                if (m.IsBye) continue;
-                string p1 = m.Player1 ?? "TBD";
-                string p2 = m.Player2 ?? "TBD";
-                string status = m.Status switch
-                {
-                    MatchStatus.Completed  => $"→ {m.Winner} wins",
-                    MatchStatus.InProgress => "(in progress)",
-                    _                      => "(pending)",
-                };
-                sb.AppendLine($"  {p1} vs {p2}  {status}");
-            }
-            sb.AppendLine();
+            sb.AppendLine($"{match.Player1 ?? "TBD"} vs {match.Player2 ?? "TBD"}" +
+                          (match.Winner != null ? $" → {match.Winner} wins (no roll record)" : ""));
+            return sb.ToString();
         }
 
-        if (ActiveTournament.IsComplete)
-            sb.AppendLine($"🏆 CHAMPION: {ActiveTournament.Champion}");
+        GameStateService.AppendGameBlock(sb, game);
+        return sb.ToString();
+    }
+
+    private string BuildReport(bool includeRolls)
+    {
+        if (ActiveTournament == null) return "(no active tournament)";
+        var t  = ActiveTournament;
+        var sb = new StringBuilder();
+
+        sb.AppendLine(includeRolls ? $"=== {t.Name} — Full Match Report ===" : $"=== {t.Name} ===");
+        if (!string.IsNullOrWhiteSpace(t.VenueName))
+            sb.AppendLine($"Venue: {t.VenueName}");
+        sb.AppendLine($"Starting: {t.StartingNumber:N0}" +
+                      (t.BetAmount > 0 ? $"  |  Bet: {t.BetAmount:N0} gil" : ""));
+        sb.AppendLine();
+
+        // AllMatches yields in display order (single: rounds; double: WB, LB, GF);
+        // emit a section header whenever the round label changes.
+        string? currentGroup = null;
+        foreach (var m in AllMatches(t))
+        {
+            if (m.IsBye) continue;
+
+            var group = MatchLabel(t, m);
+            if (group != currentGroup)
+            {
+                if (currentGroup != null) sb.AppendLine();
+                sb.AppendLine($"── {group} ──");
+                currentGroup = group;
+            }
+
+            string status = m.Status switch
+            {
+                MatchStatus.Completed  => $"→ {m.Winner} wins",
+                MatchStatus.InProgress => "(in progress)",
+                _                      => "(pending)",
+            };
+            sb.AppendLine($"  {m.Player1 ?? "TBD"} vs {m.Player2 ?? "TBD"}  {status}");
+
+            if (!includeRolls) continue;
+
+            var game = GetMatchGame(m);
+            if (game == null && m.Status == MatchStatus.InProgress &&
+                gameState.ActiveGame is { } live &&
+                m.HasPlayer(live.Player1Name) && m.HasPlayer(live.Player2Name))
+                game = live; // include the live game's rolls so far
+
+            if (game != null && game.Rolls.Count > 0)
+                GameStateService.AppendRollLines(sb, game);
+            else if (m.Status == MatchStatus.Completed)
+                sb.AppendLine("    (no roll record — winner was set manually)");
+        }
+
+        sb.AppendLine();
+        if (t.IsComplete)
+            sb.AppendLine($"🏆 CHAMPION: {t.Champion}");
 
         return sb.ToString();
+    }
+
+    private static string MatchLabel(Tournament t, TournamentMatch m)
+    {
+        if (t.Format == BracketFormat.DoubleElim)
+        {
+            return m.Side switch
+            {
+                BracketSide.GrandFinals => m.MatchIndex == 1 ? "Grand Finals Reset" : "Grand Finals",
+                BracketSide.Losers      => $"Losers Round {m.RoundIndex + 1}",
+                _                       => $"Winners Round {m.RoundIndex + 1}",
+            };
+        }
+        return m.RoundIndex == t.NumRounds - 1 ? "Finals" : $"Round {m.RoundIndex + 1}";
     }
 
     // ── Hook into GameStateService ─────────────────────────────────────────
@@ -279,10 +366,17 @@ public class TournamentService
 
         if (match == null || game.WinnerName == null) return;
 
-        match.GameId = game.Id;
-        ActiveTournament.RecordWinner(match, game.WinnerName);
+        // Record the winner under the bracket's spelling, not the game's — a game
+        // started from the Game tab may hold full chat names while the bracket has
+        // first names, and the advancing slot/highlighting must stay consistent.
+        var winner = PlayerNames.Match(game.WinnerName, match.Player1)
+            ? match.Player1!
+            : match.Player2!;
 
-        log.Information($"[DeathrollManager] Tournament match complete: {game.WinnerName} won");
+        match.GameId = game.Id;
+        ActiveTournament.RecordWinner(match, winner);
+
+        log.Information($"[DeathrollManager] Tournament match complete: {winner} won");
         if (ActiveTournament.IsComplete)
             log.Information($"[DeathrollManager] Champion: {ActiveTournament.Champion}");
 
