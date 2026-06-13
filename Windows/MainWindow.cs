@@ -50,6 +50,7 @@ public class MainWindow : Window
     // ── Unmatched roll quick-start hint ───────────────────────────────────
     private string? hintPlayer;
     private int     hintMax;
+    private bool    _hintApplied;
 
     public MainWindow(Plugin plugin) : base("Deathroll Manager###DRMain")
     {
@@ -113,9 +114,10 @@ public class MainWindow : Window
             }
         }
 
-        hintPlayer = playerName;
-        hintMax    = outOf;
-        IsOpen     = true;
+        hintPlayer   = playerName;
+        hintMax      = outOf;
+        _hintApplied = false;
+        IsOpen       = true;
     }
 
     private void ClearSoloRollOff()
@@ -463,15 +465,36 @@ public class MainWindow : Window
             {
                 ImGui.TextColored(Theme.Warning, "⚡ Roll detected!");
                 ImGui.TextColored(Theme.White, $"{hintPlayer} rolled with a max of {hintMax:N0}.");
-                ImGui.TextColored(Theme.Muted, "Fill in the form below and click Start Game.");
+                ImGui.TextColored(Theme.Muted, "Choose a slot below, or just type the players in.");
                 ImGui.EndChild();
             }
             ImGui.PopStyleColor();
             ImGui.Spacing();
 
-            if (newPlayer1.Length == 0) newPlayer1 = hintPlayer;
+            // Pre-fill Player 1 once (the common case). Applied a single time so
+            // backspacing the field actually sticks instead of refilling every frame.
+            if (!_hintApplied && newPlayer1.Trim().Length == 0)
+            {
+                newPlayer1   = hintPlayer;
+                _hintApplied = true;
+            }
             if (newStarting == Config.DefaultStartingNumber && hintMax != Config.DefaultStartingNumber)
                 newStarting = hintMax;
+
+            // Explicit placement controls — fixes "they were actually the 2nd roller".
+            if (ImGui.SmallButton($"→ Player 1##hintP1"))
+                newPlayer1 = hintPlayer;
+            ImGui.SameLine();
+            if (ImGui.SmallButton($"→ Player 2##hintP2"))
+            {
+                newPlayer2 = hintPlayer;
+                if (string.Equals(newPlayer1.Trim(), hintPlayer, StringComparison.OrdinalIgnoreCase))
+                    newPlayer1 = string.Empty;
+            }
+            ImGui.SameLine();
+            if (ImGui.SmallButton("✕ Dismiss##hintX"))
+                hintPlayer = null;
+            ImGui.Spacing();
         }
 
         ImGui.TextColored(Theme.Gold, "Start New Game");
@@ -526,8 +549,9 @@ public class MainWindow : Window
             long bet = long.TryParse(newBetStr, out var b) ? Math.Max(b, 0) : 0;
             GameState.StartGame(p1, p2, newStarting, bet, newVenue.Trim());
             ClearSoloRollOff();
-            hintPlayer  = null;
-            newPlayer1  = newPlayer2 = string.Empty;
+            hintPlayer   = null;
+            _hintApplied = false;
+            newPlayer1   = newPlayer2 = string.Empty;
             newStarting = Config.DefaultStartingNumber;
             newBetStr   = "0";
             // newVenue intentionally kept — likely still at same venue
