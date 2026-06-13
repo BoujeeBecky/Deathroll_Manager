@@ -174,10 +174,28 @@ public class GameStateService
 
         var roll = redoStack[^1];
 
+        // Redoing the first roll must reproduce the auto-swap the live roll
+        // produced (the matching undo reversed it). If this roll came from the
+        // player now seated second, re-apply the swap before validating so the
+        // redone state matches the original post-first-roll state exactly.
+        bool reSwapFirstRoll = ActiveGame.Rolls.Count == 0 &&
+                               NamesMatch(roll.PlayerName, ActiveGame.Player2Name);
+        if (reSwapFirstRoll)
+        {
+            ActiveGame.SwapPlayers();
+            ActiveGame.FirstRollSwapped = true;
+        }
+
         // Sanity check — should always hold, since new rolls clear the stack.
         if (roll.MaxValue != ActiveGame.CurrentMax ||
             !NamesMatch(roll.PlayerName, ActiveGame.CurrentPlayerTurn))
         {
+            // Roll back the speculative re-swap before bailing out.
+            if (reSwapFirstRoll)
+            {
+                ActiveGame.SwapPlayers();
+                ActiveGame.FirstRollSwapped = false;
+            }
             log.Warning("[DeathrollManager] Redo stack diverged from game state — clearing");
             redoStack.Clear();
             StateChanged?.Invoke();
