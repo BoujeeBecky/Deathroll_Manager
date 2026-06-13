@@ -20,8 +20,10 @@ public class DeathrollGame
     public DateTime   StartedAt   { get; set; } = DateTime.Now;
     public DateTime?  CompletedAt { get; set; }
 
-    // True once the first-roll self-correction (or a manual swap path) has
-    // flipped the seats. Lets undo of the first roll restore the original order.
+    // Set true ONLY by the first-roll auto-correction in GameStateService when it
+    // swaps seats, so undo of that first roll can restore the original order.
+    // SwapPlayers() does NOT set this — callers own the flag, because a deliberate
+    // manual swap must not be auto-reversed by undo.
     public bool FirstRollSwapped { get; set; }
 
     // Derived convenience properties
