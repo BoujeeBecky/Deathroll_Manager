@@ -20,6 +20,10 @@ public class DeathrollGame
     public DateTime   StartedAt   { get; set; } = DateTime.Now;
     public DateTime?  CompletedAt { get; set; }
 
+    // True once the first-roll self-correction (or a manual swap path) has
+    // flipped the seats. Lets undo of the first roll restore the original order.
+    public bool FirstRollSwapped { get; set; }
+
     // Derived convenience properties
     public string? WinnerName => Status == GameStatus.Completed && Rolls.Count > 0
         ? (Rolls[^1].PlayerName == Player1Name ? Player2Name : Player1Name)
@@ -45,4 +49,14 @@ public class DeathrollGame
 
     public TimeSpan Duration =>
         CompletedAt.HasValue ? CompletedAt.Value - StartedAt : DateTime.Now - StartedAt;
+
+    // Swaps which player is seated first. Only valid before any roll exists,
+    // so existing roll attribution can never be scrambled. Returns true if it
+    // actually swapped.
+    public bool SwapPlayers()
+    {
+        if (Rolls.Count != 0) return false;
+        (Player1Name, Player2Name) = (Player2Name, Player1Name);
+        return true;
+    }
 }
