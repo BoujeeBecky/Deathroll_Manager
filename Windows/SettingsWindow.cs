@@ -1,7 +1,9 @@
 using Dalamud.Interface.Windowing;
 using Dalamud.Bindings.ImGui;
 using DeathrollManager.Models;
+using System;
 using System.Collections.Generic;
+using System.Linq;
 
 namespace DeathrollManager.Windows;
 
@@ -78,6 +80,18 @@ public class SettingsWindow : Window
             Config.Save();
         }
 
+        var timerSecs = Config.RollTimerSeconds;
+        ImGui.SetNextItemWidth(120);
+        if (ImGui.InputInt("Roll timer (seconds, 0 = off)", ref timerSecs))
+        {
+            Config.RollTimerSeconds = Math.Clamp(timerSecs, 0, 600);
+            Config.Save();
+        }
+        ImGui.SameLine();
+        ImGui.TextDisabled("(?)");
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip("Shows a per-roll countdown during live games (turns red as it\nexpires). Purely visual — pair with the ⏰ Nudge button in MC Controls.");
+
         var popOut = Config.PopOutBattlePanel;
         if (ImGui.Checkbox("Pop out Battle view as a separate window", ref popOut))
         {
@@ -88,6 +102,44 @@ public class SettingsWindow : Window
         ImGui.TextDisabled("(?)");
         if (ImGui.IsItemHovered())
             ImGui.SetTooltip("When enabled, the Battle scene opens as a floating window\nwhenever a game starts, so you can pin it anywhere on screen.");
+
+        ImGui.Spacing();
+        ImGui.TextColored(Theme.Gold, "Appearance");
+        ImGui.Separator();
+        ImGui.Spacing();
+
+        int themeIdx = Array.FindIndex(Theme.Presets, p =>
+            string.Equals(p.Name, Config.ThemeName, StringComparison.OrdinalIgnoreCase));
+        if (themeIdx < 0) themeIdx = 0;
+        string themeItems = string.Concat(Theme.Presets.Select(p => p.Name + "\0"));
+        ImGui.SetNextItemWidth(180);
+        if (ImGui.Combo("Theme", ref themeIdx, themeItems))
+        {
+            Config.ThemeName = Theme.Presets[themeIdx].Name;
+            Config.Save();
+            Theme.Apply(Config.ThemeName);
+        }
+        ImGui.SameLine();
+        // Live swatches: accent / player 1 / player 2
+        ImGui.TextColored(Theme.Gold,    "■");
+        ImGui.SameLine(0, 2);
+        ImGui.TextColored(Theme.Player1, "■");
+        ImGui.SameLine(0, 2);
+        ImGui.TextColored(Theme.Player2, "■");
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip("Accent · Player 1 · Player 2\nApplies instantly to every window");
+
+        var sounds = Config.SoundCues;
+        if (ImGui.Checkbox("Sound cues", ref sounds))
+        {
+            Config.SoundCues = sounds;
+            Config.Save();
+            if (sounds) Helpers.SoundCue.Play(Helpers.SoundCue.Champion); // audible preview
+        }
+        ImGui.SameLine();
+        ImGui.TextDisabled("(?)");
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip("Plays FFXIV's own sound effects on death rolls (💀) and\ntournament champions (🏆). Local only — nobody else hears them.");
 
         ImGui.Spacing();
         ImGui.TextColored(Theme.Gold, "Defaults");

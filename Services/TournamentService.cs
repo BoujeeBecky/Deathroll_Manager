@@ -18,6 +18,10 @@ public class TournamentService
     /// <summary>Fires on any bracket state change so windows can redraw.</summary>
     public event Action? TournamentStateChanged;
 
+    /// <summary>Fires after a repair (clear result / rename) — relay must full-resync,
+    /// since incremental MATCH dedup can't express changed or removed results.</summary>
+    public event Action<Tournament>? BracketRepaired;
+
     // ── Roll-off state ─────────────────────────────────────────────────────
     // Tracks both players rolling /random 10 to decide who goes first.
     public string?  RollOffP1          { get; private set; }
@@ -192,6 +196,37 @@ public class TournamentService
         AllMatches(ActiveTournament).Any(m => m.GameId == gameId);
 
     // ── Manual override ────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Clears a completed match result. Downstream results that depended on the
+    /// winner revert to pending. Returns how many downstream results were also
+    /// reverted, or -1 if there was nothing to clear.
+    /// </summary>
+    public int ClearMatchResult(TournamentMatch match)
+    {
+        if (ActiveTournament == null) return -1;
+        CancelRollOff();
+        int dropped = ActiveTournament.ClearResult(match);
+        if (dropped >= 0)
+        {
+            log.Information($"[DeathrollManager] Result cleared: {match.Player1} vs {match.Player2} " +
+                            $"({dropped} downstream result(s) reverted)");
+            BracketRepaired?.Invoke(ActiveTournament);
+            TournamentStateChanged?.Invoke();
+        }
+        return dropped;
+    }
+
+    /// <summary>Renames a player across the bracket and any live game tracking them.</summary>
+    public void RenamePlayer(string oldName, string newName)
+    {
+        if (ActiveTournament == null) return;
+        ActiveTournament.RenamePlayer(oldName, newName);
+        gameState.RenameInActiveGame(oldName, newName);
+        log.Information($"[DeathrollManager] Player renamed: {oldName} → {newName}");
+        BracketRepaired?.Invoke(ActiveTournament);
+        TournamentStateChanged?.Invoke();
+    }
 
     public void ForceWinner(TournamentMatch match, string winner)
     {

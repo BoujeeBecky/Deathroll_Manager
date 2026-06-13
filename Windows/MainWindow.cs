@@ -33,6 +33,9 @@ public class MainWindow : Window
     // ── Help tab state ────────────────────────────────────────────────────
     private int _helpSection = 0;
 
+    // ── Macros tab ────────────────────────────────────────────────────────
+    private readonly MacrosPanel macrosPanel;
+
     // ── Single-match roll-off state ───────────────────────────────────────
     private bool    _soloRollOffActive;
     private int?    _soloRollOffP1Roll;
@@ -51,11 +54,20 @@ public class MainWindow : Window
     public MainWindow(Plugin plugin) : base("Deathroll Manager###DRMain")
     {
         this.plugin = plugin;
+        macrosPanel = new MacrosPanel(plugin.Configuration);
         newStarting = plugin.Configuration.DefaultStartingNumber;
+
+        TitleBarButtons.Add(new TitleBarButton
+        {
+            Icon        = Dalamud.Interface.FontAwesomeIcon.Cog,
+            IconOffset  = new Vector2(2, 1),
+            Click       = _ => plugin.OpenSettings(),
+            ShowTooltip = () => ImGui.SetTooltip("Settings"),
+        });
 
         SizeConstraints = new WindowSizeConstraints
         {
-            MinimumSize = new(480, 540),
+            MinimumSize = new(560, 540),
             MaximumSize = new(720, 920),
         };
 
@@ -74,8 +86,8 @@ public class MainWindow : Window
         // Intercept /random 10 rolls for an active single-match roll-off
         if (_soloRollOffActive && outOf == 10)
         {
-            bool isP1 = string.Equals(playerName, newPlayer1.Trim(), StringComparison.OrdinalIgnoreCase);
-            bool isP2 = string.Equals(playerName, newPlayer2.Trim(), StringComparison.OrdinalIgnoreCase);
+            bool isP1 = PlayerNames.Match(playerName, newPlayer1.Trim());
+            bool isP2 = PlayerNames.Match(playerName, newPlayer2.Trim());
             if (isP1 || isP2)
             {
                 if (isP1) _soloRollOffP1Roll = rolled;
@@ -134,6 +146,7 @@ public class MainWindow : Window
             if (ImGui.BeginTabItem("Tournament"))  { DrawTournamentTab();                  ImGui.EndTabItem(); }
             if (ImGui.BeginTabItem("History"))     { DrawHistoryTab();                     ImGui.EndTabItem(); }
             if (ImGui.BeginTabItem("Leaderboard")) { DrawLeaderboardTab();                 ImGui.EndTabItem(); }
+            if (ImGui.BeginTabItem("Macros"))      { macrosPanel.Draw();                   ImGui.EndTabItem(); }
             if (ImGui.BeginTabItem("Help"))        { DrawHowToUseTab();                    ImGui.EndTabItem(); }
             if (ImGui.BeginTabItem("About"))       { DrawAboutTab();                       ImGui.EndTabItem(); }
             ImGui.EndTabBar();
@@ -178,15 +191,33 @@ public class MainWindow : Window
 
         var last = hist[0];
         if (last.Status != GameStatus.Completed || last.CompletedAt == null) return;
-        if ((DateTime.Now - last.CompletedAt.Value).TotalMinutes > 3) return;
+        if ((DateTime.Now - last.CompletedAt.Value).TotalMinutes > 10) return;
         if (TournamentSvc.IsGameLinkedToBracket(last.Id)) return;
 
         ImGui.PushStyleColor(ImGuiCol.ChildBg, Theme.ToU32(Theme.CardBg));
-        if (ImGui.BeginChild("##UndoLast", new Vector2(0, 52), true))
+        if (ImGui.BeginChild("##UndoLast", new Vector2(0, 76), true))
         {
             ImGui.TextColored(Theme.Muted,
                 $"Last game: {last.WinnerName} beat {last.LoserName} (rolled from {last.StartingNumber:N0})");
-            if (ImGui.SmallButton("↶ Undo final roll — reopen game"))
+
+            if (ImGui.SmallButton("⚡ Rematch"))
+                GameState.StartGame(last.Player1Name, last.Player2Name,
+                    last.StartingNumber, last.BetAmount, last.VenueName);
+            if (ImGui.IsItemHovered())
+                ImGui.SetTooltip("Same players, same starting number, same bet.\nEither player may roll first — turn order self-corrects.");
+
+            if (last.BetAmount > 0)
+            {
+                ImGui.SameLine();
+                if (ImGui.SmallButton($"💰 Double or Nothing ({last.BetAmount * 2:N0}g)"))
+                    GameState.StartGame(last.Player1Name, last.Player2Name,
+                        last.StartingNumber, last.BetAmount * 2, last.VenueName);
+                if (ImGui.IsItemHovered())
+                    ImGui.SetTooltip("Rematch with the bet doubled");
+            }
+
+            ImGui.SameLine();
+            if (ImGui.SmallButton("↶ Undo final roll"))
             {
                 if (GameState.ReopenLastCompletedGame())
                     gameOverFlashUntil = 0;
@@ -344,6 +375,7 @@ public class MainWindow : Window
         bool  isP1   = game.CurrentPlayerTurn == game.Player1Name;
         var   color  = (isP1 ? Theme.Player1 : Theme.Player2) * new Vector4(1, 1, 1, 0.6f + pulse * 0.4f);
         CenteredText($"▶  {game.CurrentPlayerTurn}'s turn  ◀", color);
+        RollTimer.DrawCentered(Config, game);
 
         ImGui.Spacing();
 
@@ -1133,7 +1165,7 @@ public class MainWindow : Window
     private static readonly string[] HelpSections =
     {
         "Getting Started", "Battle Tab", "Single Matches", "Tournaments",
-        "Brackets", "History", "Leaderboards", "Game Tracking",
+        "Brackets", "History", "Leaderboards", "Macros", "Game Tracking",
         "Relay System", "Settings",
     };
 
@@ -1197,10 +1229,11 @@ public class MainWindow : Window
                 SectionHeader("Battle Tab");
                 Body("The Battle tab shows an animated stick-figure duel that reacts to the live game in real time.");
                 Gap();
-                Bullet("Each /random roll triggers a sword-swing animation on the rolling player's side.");
-                Bullet("HP bars are danger-tinted and shrink as the current max drops toward 1.");
-                Bullet("When someone rolls 1, the loser's figure fades and shatters — the death animation plays out over ~1.3 seconds.");
-                Bullet("After the animation the winner stands alone until a new game starts.");
+                Bullet("Each /random roll triggers a sword-swing animation on the rolling player's side — your roll is an attack that drains the OPPONENT's HP bar to the new max.");
+                Bullet("HP bars are danger-tinted (green when safe, red when low), pulse when critical, and leave a fading red trail when damage lands — rolling 1 is the exception: that drains your own bar.");
+                Bullet("Rolling exactly the maximum triggers a PARRY flash.");
+                Bullet("When someone rolls 1, the loser's figure fades and their bar shatters — the death animation plays out over ~1.3 seconds.");
+                Bullet("⟲ Reset Battle (under the result) clears the scene back to idle whenever you want. Undoing the final roll also brings the loser back automatically.");
                 Gap();
                 SectionHeader("Pop-out Window");
                 Body("Enable Pop-out Battle Panel in Settings. When a new game starts, the battle scene opens as a separate floating window you can pin anywhere on screen — handy for streaming or dual monitors.");
@@ -1230,6 +1263,8 @@ public class MainWindow : Window
                 Gap();
                 SectionHeader("Game Over");
                 Body("When someone rolls 1 the game-over flash fires (if enabled), then the Game tab shows the summary. The result is saved to History automatically and immediately reflected in the Leaderboard.");
+                Gap();
+                Body("For about 10 minutes afterward the Game tab also offers ⚡ Rematch (same players, same stakes) and — if there was a bet — 💰 Double or Nothing.");
                 break;
 
             case 3: // Tournaments
@@ -1246,20 +1281,25 @@ public class MainWindow : Window
                 Gap();
                 Body("It does not matter which player actually rolls first — if the second-listed player opens the game, the plugin swaps the turn order on its own.");
                 Gap();
-                Body("Left-click any completed match to view the full roll-by-roll history (with a 📋 Copy button). Right-click any match to force a winner (forfeit or no-show).");
+                Body("Left-click any completed match to view the full roll-by-roll history (with a 📋 Copy button). Right-click any match for the repair menu:");
+                Bullet("Force winner — for forfeits and no-shows.");
+                Bullet("↶ Clear this result — reverts a completed match to pending. Anything downstream that depended on the winner reverts too, and spectators/web resync automatically.");
+                Bullet("✎ Rename player — fixes a typo'd name everywhere at once: the whole bracket, any live game, and the relay/web viewer.");
+                Gap();
+                Body("🔍 The find-player box above the bracket pulses matching match boxes gold — handy for \"where am I?\" questions at big events.");
                 Gap();
                 Body("📜 Full Report (next to Copy Results) opens a review window with every match and every roll in plain text — Copy All exports it for safekeeping or for reconstructing a bracket if something goes badly wrong mid-event.");
                 Gap();
                 SectionHeader("MC Controls");
                 Body("The MC Controls panel (in the bracket window) has one-click announcement buttons:");
-                Bullet("Call Up — announce the next two players.");
+                Bullet("Call Up — announce the next two players. The Auto📢 checkbox announces each new pairing automatically the moment it becomes ready.");
                 Bullet("Roll Off — prompt both players to /random 10 to decide who rolls first. The plugin reads the results from chat (first names are enough — bracket names don't need to be full character names).");
                 Bullet("First roller buttons — click a player's name to set who rolls first yourself. Use this if the roll-off 10s weren't picked up, or to skip the roll-off entirely.");
                 Bullet("Cancel roll-off — clears a stuck roll-off and re-enables Start Match.");
                 Bullet("Start Match — announce the starting number and who rolls first (uses the roll-off result or your manual pick).");
                 Bullet("Announce Winner — declare the round winner.");
                 Gap();
-                Body("While a match is live, a manual roll entry box appears in MC Controls: type the rolled value and click the player's name to record any roll chat detection missed. ↶ Undo / ↷ Redo step back and forward through the last 10 rolls if something went in wrong.");
+                Body("While a match is live, a manual roll entry box appears in MC Controls: type the rolled value and click the player's name to record any roll chat detection missed. ↶ Undo / ↷ Redo step back and forward through the last 10 rolls if something went in wrong. The ⏰ Nudge button politely reminds the current roller it is their turn (pairs well with the roll timer in Settings).");
                 Body("Select the announcement channel (Say / Yell / Shout / Party / FC) at the top of MC Controls or in Settings.");
                 break;
 
@@ -1315,7 +1355,28 @@ public class MainWindow : Window
                 Body("Tip: always fill in the Venue field when starting a game or tournament. It is the only way to build a per-venue leaderboard.");
                 break;
 
-            case 7: // Game Tracking
+            case 7: // Macros
+                SectionHeader("Macros");
+                Body("The Macros tab stores reusable chat snippets — hype lines, venue plugs, anything you want to fire off mid-match with one click. \"OH! THAT WAS A BIG HIT!\" is one button away.");
+                Gap();
+                SectionHeader("Creating & Using");
+                Bullet("➕ Add Macro creates a new entry; click any macro on the left to edit it.");
+                Bullet("Pick a channel per macro (Say / Yell / Shout / Party / FC).");
+                Bullet("📣 Send fires it into chat. 📋 Copy exports it in FFXIV User Macro format (with /wait 2 lines) for a hotbar slot.");
+                Bullet("💾 Save writes your macros to disk — unsaved edits show a * next to the name.");
+                Gap();
+                SectionHeader("Long Text");
+                Body("Text longer than the per-message limit (150 default — the safe FFXIV macro line length) splits automatically at word boundaries. Pressing Enter in the text box forces a new message. The Preview shows exactly how it will land in chat.");
+                Body("Multi-message sends are paced 2 seconds apart automatically so you cannot trip the chat flood filter. Up to 15 messages per macro.");
+                Gap();
+                SectionHeader("Symbols & Emoji");
+                Body("The Insert row adds decorative symbols (★ ♥ ♪ …) that FFXIV chat can actually display. Regular emoji from your keyboard (🎲 💀) are not supported by the game's chat font — they would show as garbage in-game, so stick to the provided set. For fancy Unicode-styled text, build it with Shoutmaker on tometools.com and paste it in.");
+                Gap();
+                SectionHeader("Typing Feels Slightly Delayed?");
+                Body("Normal, and nothing is lost. The plugin's windows are drawn by the game itself, and when you type very fast the game hands over keystrokes roughly one per drawn frame — so a quick burst of typing can take a moment to finish appearing. Everything you typed always arrives, in order.");
+                break;
+
+            case 8: // Game Tracking
                 SectionHeader("Game Tracking");
                 Body("The plugin listens to chat for the FFXIV dice roll message:");
                 ImGui.Spacing();
@@ -1338,7 +1399,7 @@ public class MainWindow : Window
                 Body("During a tournament match, the plugin listens the same way. When the active game ends with a roll of 1 the bracket advances automatically — no button press needed.");
                 break;
 
-            case 8: // Relay System
+            case 9: // Relay System
                 SectionHeader("Relay System");
                 Body("The relay keeps your live bracket in sync with spectators in two ways: encoded /say messages for in-game followers, and a live web viewer at tometools.com for anyone online.");
                 Gap();
@@ -1347,6 +1408,8 @@ public class MainWindow : Window
                 Bullet("Share the code with in-game spectators, or share the web link: tometools.com/bracket?code=XXXXXX");
                 Bullet("⟳ Resync — re-sends the full bracket for late joiners. Sends 3–4 compressed /say messages regardless of bracket size or how far the tournament has progressed.");
                 Bullet("Stop Relay — drops the send queue and sends an END signal immediately.");
+                Bullet("Web sync health — ✓Ns means the web viewer synced N seconds ago; ⚠ web means the last sync FAILED and the web bracket may be stale (check your connection, then ⟳ Resync).");
+                Bullet("Bracket repairs (clear result / rename) resync spectators and the web viewer automatically.");
                 Gap();
                 SectionHeader("Broadcast via /say (checkbox next to ⟳ Resync)");
                 Body("When checked, bracket updates are broadcast via encoded /say messages — this is what allows in-game spectators to join with a code. The encoded text in chat is the relay system working as intended.");
@@ -1368,7 +1431,7 @@ public class MainWindow : Window
                 Body("Relay messages are tied to the first sender detected. Others sending the same code are silently ignored — this prevents bracket spoofing.");
                 break;
 
-            case 9: // Settings
+            case 10: // Settings
                 SectionHeader("Chat Channels");
                 Body("Toggle which channels to monitor for /random rolls. Say is the native /random channel and is always on. Enable others to match where your venue does deathrolls.");
                 Gap();
@@ -1378,6 +1441,11 @@ public class MainWindow : Window
                 Bullet("Show timestamps — add HH:mm:ss to each roll in the roll history.");
                 Bullet("Flash on game over — 3-second red overlay when someone rolls 1.");
                 Bullet("Pop-out battle panel — auto-opens the animated Battle scene as a floating window when a game starts.");
+                Bullet("Roll timer — optional per-roll countdown shown during live games. Purely visual (nobody is auto-forfeited); it turns red as time runs out.");
+                Gap();
+                SectionHeader("Appearance");
+                Bullet("Theme — eight color palettes (Classic, Synthwave, Ice, Crimson Court, Emerald Casino, Banana, Boujee, Opulent). Applies instantly to every window. Danger colors never change — red always means trouble.");
+                Bullet("Sound cues — FFXIV's own sound effects on death rolls and tournament champions. Local only; nobody else hears them.");
                 Gap();
                 SectionHeader("Defaults");
                 Bullet("Default starting number — pre-fills the starting number for new games and tournaments.");

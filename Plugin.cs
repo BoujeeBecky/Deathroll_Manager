@@ -35,10 +35,14 @@ public sealed class Plugin : IDalamudPlugin
     public Plugin()
     {
         Configuration     = PluginInterface.GetPluginConfig() as Configuration ?? new Configuration();
+        Windows.Theme.Apply(Configuration.ThemeName);
         GameState         = new GameStateService(Configuration, Log);
         ChatMonitor       = new ChatMonitorService(ChatGui, GameState, Configuration, Log);
         TournamentService = new TournamentService(GameState, Log);
-        RelayService      = new TournamentRelayService(ChatGui, Log, Framework);
+        RelayService      = new TournamentRelayService(ChatGui, Log, Framework)
+        {
+            BroadcastToChat = Configuration.RelayBroadcastToChat,
+        };
         BattleRenderer    = new BattleRenderer(GameState);
 
         // Keep relay in sync with tournament state: send match results as they happen,
@@ -48,7 +52,16 @@ public sealed class Plugin : IDalamudPlugin
             var t = TournamentService.ActiveTournament;
             RelayService.OnTournamentStateChanged(t);
             if (t == null) RelayService.StopHostRelay();
+
+            // Champion fanfare (once per tournament)
+            if (t is { IsComplete: true } && _champSoundFor != t.Id)
+            {
+                _champSoundFor = t.Id;
+                if (Configuration.SoundCues) Helpers.SoundCue.Play(Helpers.SoundCue.Champion);
+            }
         };
+
+        GameState.GameCompleted += OnGameCompletedSound;
 
         mainWindow       = new MainWindow(this);
         settingsWindow   = new SettingsWindow(this);
@@ -80,9 +93,32 @@ public sealed class Plugin : IDalamudPlugin
         PluginInterface.UiBuilder.OpenConfigUi += OnOpenConfig;
         PluginInterface.UiBuilder.OpenMainUi   += OnOpenMain;
 
+        Framework.Update += OnFrameworkUpdate;
+
         ChatMonitor.UnmatchedRollDetected += mainWindow.OnUnmatchedRoll;
         ChatMonitor.UnmatchedRollDetected += OnUnmatchedRollForTournament;
+        TournamentService.BracketRepaired += OnBracketRepaired;
     }
+
+    // Incremental MATCH dedup can't express cleared/renamed results — full resync.
+    private void OnBracketRepaired(Models.Tournament t)
+    {
+        // A repair that un-completes the tournament re-arms the champion fanfare,
+        // so a corrected grand-finals result still gets its celebration.
+        if (!t.IsComplete) _champSoundFor = null;
+        RelayService.ResyncBroadcast(t);
+    }
+
+    private System.Guid? _champSoundFor;
+
+    private void OnGameCompletedSound(Models.DeathrollGame game)
+    {
+        if (Configuration.SoundCues) Helpers.SoundCue.Play(Helpers.SoundCue.Death);
+    }
+
+    // Drains the paced chat queue (multi-message macros) on the game thread.
+    private void OnFrameworkUpdate(Dalamud.Plugin.Services.IFramework _) =>
+        Helpers.ChatSender.PumpQueue();
 
     private void OnUnmatchedRollForTournament(string player, int rolled, int outOf)
     {
@@ -95,6 +131,10 @@ public sealed class Plugin : IDalamudPlugin
     {
         ChatMonitor.UnmatchedRollDetected -= mainWindow.OnUnmatchedRoll;
         ChatMonitor.UnmatchedRollDetected -= OnUnmatchedRollForTournament;
+        TournamentService.BracketRepaired -= OnBracketRepaired;
+        GameState.GameCompleted           -= OnGameCompletedSound;
+
+        Framework.Update -= OnFrameworkUpdate;
 
         PluginInterface.UiBuilder.Draw        -= windowSystem.Draw;
         PluginInterface.UiBuilder.OpenConfigUi -= OnOpenConfig;
@@ -125,6 +165,9 @@ public sealed class Plugin : IDalamudPlugin
                 break;
         }
     }
+
+    /// <summary>Opens the settings window (title-bar gear, /dr settings, config button).</summary>
+    public void OpenSettings() => settingsWindow.IsOpen = true;
 
     private void OnOpenConfig()  => settingsWindow.IsOpen   = true;
     private void OnOpenMain()    => mainWindow.IsOpen        = true;

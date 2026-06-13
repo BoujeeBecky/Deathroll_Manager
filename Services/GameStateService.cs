@@ -203,6 +203,25 @@ public class GameStateService
         return true;
     }
 
+    // Keeps a live game consistent when a tournament player is renamed —
+    // registered names AND recorded roll names must move together, since
+    // CurrentPlayerTurn derives from comparing the two.
+    public void RenameInActiveGame(string oldName, string newName)
+    {
+        if (ActiveGame == null) return;
+        bool touched = false;
+        if (string.Equals(ActiveGame.Player1Name, oldName, StringComparison.OrdinalIgnoreCase))
+        { ActiveGame.Player1Name = newName; touched = true; }
+        if (string.Equals(ActiveGame.Player2Name, oldName, StringComparison.OrdinalIgnoreCase))
+        { ActiveGame.Player2Name = newName; touched = true; }
+        if (!touched) return;
+
+        foreach (var roll in ActiveGame.Rolls)
+            if (string.Equals(roll.PlayerName, oldName, StringComparison.OrdinalIgnoreCase))
+                roll.PlayerName = newName;
+        StateChanged?.Invoke();
+    }
+
     public void AbandonGame()
     {
         if (ActiveGame == null) return;

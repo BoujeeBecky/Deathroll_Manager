@@ -388,6 +388,167 @@ public class Tournament
         GrandFinalsNeedsReset = false;
     }
 
+    // ── Bracket repair ────────────────────────────────────────────────────
+
+    /// <summary>All matches in dependency order: WB rounds, LB rounds, GF, GF reset.</summary>
+    public IEnumerable<TournamentMatch> EnumerateMatches()
+    {
+        if (Format == BracketFormat.DoubleElim)
+        {
+            foreach (var r in WBRounds) foreach (var m in r) yield return m;
+            foreach (var r in LBRounds) foreach (var m in r) yield return m;
+            if (GrandFinalsMatch != null) yield return GrandFinalsMatch;
+            if (GrandFinalsReset != null) yield return GrandFinalsReset;
+        }
+        else
+        {
+            foreach (var r in Rounds) foreach (var m in r) yield return m;
+        }
+    }
+
+    /// <summary>
+    /// Clears a completed result by resetting the bracket to creation state and
+    /// replaying every OTHER recorded result in dependency order. Results that
+    /// no longer validate (their winner doesn't reach that match anymore) are
+    /// dropped — i.e., everything downstream of the cleared result reverts to
+    /// pending. Returns the number of downstream results dropped, or -1 if the
+    /// target wasn't a clearable result.
+    /// </summary>
+    public int ClearResult(TournamentMatch target)
+    {
+        if (!target.IsCompleted || target.IsBye || target.Winner == null) return -1;
+
+        // 1) Snapshot results + live markers (replay order = EnumerateMatches order)
+        var completed  = new List<(BracketSide side, int r, int m, string winner, Guid? gameId)>();
+        var inProgress = new List<(BracketSide side, int r, int m)>();
+        bool hadReset  = GrandFinalsReset != null;
+
+        foreach (var match in EnumerateMatches())
+        {
+            if (ReferenceEquals(match, target)) continue;
+            if (match.IsCompleted && !match.IsBye && match.Winner != null)
+                completed.Add((match.Side, match.RoundIndex, match.MatchIndex, match.Winner, match.GameId));
+            else if (match.Status == MatchStatus.InProgress)
+                inProgress.Add((match.Side, match.RoundIndex, match.MatchIndex));
+        }
+
+        // 2) Reset to creation state (round-0 seats are fixed at creation)
+        ResetDerivedState();
+
+        // 3) Replay
+        int applied = 0;
+        foreach (var e in completed)
+        {
+            var match = FindMatch(e.side, e.r, e.m);
+            if (match == null && e.side == BracketSide.GrandFinals && e.m == 1 &&
+                GrandFinalsNeedsReset && hadReset)
+            {
+                TriggerBracketReset(); // GF reset match only exists after the host triggers it
+                match = GrandFinalsReset;
+            }
+            if (match == null) continue;
+            if (match.Status != MatchStatus.Pending) continue;                          // bye'd away
+            if (match.Player1 == null || match.Player2 == null) continue;               // seat never filled
+            if (e.winner != match.Player1 && e.winner != match.Player2) continue;       // winner no longer here
+            RecordWinner(match, e.winner);
+            match.GameId = e.gameId;
+            applied++;
+        }
+
+        // Host had triggered the GF reset but it wasn't played yet — restore the match
+        if (GrandFinalsNeedsReset && hadReset && GrandFinalsReset == null)
+            TriggerBracketReset();
+
+        // 4) Restore live-match markers where the pairing survived
+        foreach (var e in inProgress)
+        {
+            var match = FindMatch(e.side, e.r, e.m);
+            if (match is { Status: MatchStatus.Pending, BothPlayersReady: true })
+                match.Status = MatchStatus.InProgress;
+        }
+
+        return completed.Count - applied;
+    }
+
+    /// <summary>Renames a player everywhere in the bracket (seats, winners, champion).</summary>
+    public void RenamePlayer(string oldName, string newName)
+    {
+        foreach (var m in EnumerateMatches())
+        {
+            if (string.Equals(m.Player1, oldName, StringComparison.OrdinalIgnoreCase)) m.Player1 = newName;
+            if (string.Equals(m.Player2, oldName, StringComparison.OrdinalIgnoreCase)) m.Player2 = newName;
+            if (string.Equals(m.Winner,  oldName, StringComparison.OrdinalIgnoreCase)) m.Winner  = newName;
+        }
+        if (string.Equals(Champion, oldName, StringComparison.OrdinalIgnoreCase))
+            Champion = newName;
+    }
+
+    private TournamentMatch? FindMatch(BracketSide side, int r, int m) => side switch
+    {
+        BracketSide.GrandFinals => m == 0 ? GrandFinalsMatch : GrandFinalsReset,
+        BracketSide.Losers      => r < LBRounds.Count && m < LBRounds[r].Count ? LBRounds[r][m] : null,
+        _ => Format == BracketFormat.DoubleElim
+            ? (r < WBRounds.Count && m < WBRounds[r].Count ? WBRounds[r][m] : null)
+            : (r < Rounds.Count   && m < Rounds[r].Count   ? Rounds[r][m]   : null),
+    };
+
+    /// <summary>Clears all derived state back to how the factory left it; re-runs bye propagation.</summary>
+    private void ResetDerivedState()
+    {
+        IsComplete = false;
+        Champion   = null;
+
+        if (Format == BracketFormat.SingleElim)
+        {
+            for (int r = 0; r < Rounds.Count; r++)
+            foreach (var m in Rounds[r])
+            {
+                if (r == 0)
+                {
+                    if (m.Status == MatchStatus.Bye) continue; // creation-time bye — keep as-is
+                    m.Winner = null; m.Status = MatchStatus.Pending; m.GameId = null;
+                }
+                else
+                {
+                    m.Player1 = null; m.Player2 = null; m.Winner = null;
+                    m.Status  = MatchStatus.Pending; m.GameId = null;
+                }
+            }
+            PropagateByes();
+            return;
+        }
+
+        GrandFinalsNeedsReset = false;
+        GrandFinalsReset      = null;
+        for (int r = 0; r < WBRounds.Count; r++)
+        foreach (var m in WBRounds[r])
+        {
+            if (r == 0)
+            {
+                if (m.Status == MatchStatus.Bye) continue;
+                m.Winner = null; m.Status = MatchStatus.Pending; m.GameId = null;
+            }
+            else
+            {
+                m.Player1 = null; m.Player2 = null; m.Winner = null;
+                m.Status  = MatchStatus.Pending; m.GameId = null;
+            }
+        }
+        foreach (var round in LBRounds)
+        foreach (var m in round)
+        {
+            m.Player1 = null; m.Player2 = null; m.Winner = null;
+            m.Status  = MatchStatus.Pending; m.GameId = null;
+        }
+        if (GrandFinalsMatch != null)
+        {
+            GrandFinalsMatch.Player1 = null; GrandFinalsMatch.Player2 = null;
+            GrandFinalsMatch.Winner  = null; GrandFinalsMatch.Status  = MatchStatus.Pending;
+            GrandFinalsMatch.GameId  = null;
+        }
+        PropagateByesDE();
+    }
+
     private void PropagateByesDE()
     {
         foreach (var match in WBRounds[0])

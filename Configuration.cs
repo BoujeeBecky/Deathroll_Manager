@@ -14,6 +14,16 @@ public class AnnouncementMacro
     public string Template { get; set; } = "{p1} vs {p2}";
 }
 
+/// <summary>Free-text chat macro (Macros tab) — plain text, no placeholders.
+/// Distinct from AnnouncementMacro, which is a tournament MC template.</summary>
+[Serializable]
+public class ChatMacro
+{
+    public string    Name    { get; set; } = "Macro";
+    public string    Text    { get; set; } = string.Empty;
+    public MCChannel Channel { get; set; } = MCChannel.Say;
+}
+
 [Serializable]
 public class Configuration : IPluginConfiguration
 {
@@ -43,6 +53,19 @@ public class Configuration : IPluginConfiguration
 
     // Announcement macros (custom /say templates for tournament MCs)
     public List<AnnouncementMacro> AnnouncementMacros { get; set; } = new();
+
+    // Free-text chat macros (Macros tab)
+    public List<ChatMacro> ChatMacros     { get; set; } = new();
+    public int             MacroCharLimit { get; set; } = 150; // per-message split limit (150 safe, ~175 max)
+
+    // Tournament hosting QOL
+    public bool AutoCallUp           { get; set; } = false; // announce next pairing when a match completes
+    public int  RollTimerSeconds     { get; set; } = 0;     // per-roll countdown, 0 = off
+    public bool RelayBroadcastToChat { get; set; } = true;  // 📡/say checkbox — relay /say broadcast on/off
+
+    // Theme & flair
+    public string ThemeName  { get; set; } = "Classic";
+    public bool   SoundCues  { get; set; } = false;      // game sfx on death roll / champion
 
     public static string MCChannelCommand(MCChannel ch) => ch switch
     {

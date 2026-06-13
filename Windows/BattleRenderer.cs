@@ -55,6 +55,15 @@ public sealed class BattleRenderer : IDisposable
     // Test mode — rolls are simulated locally, no chat required
     private bool _testMode;
 
+    // HP bars — fighting-game style. A player's HP is the max THEY are facing
+    // (opponent's last roll ÷ starting number): your low roll damages the
+    // opponent. Rolling 1 is the exception — the roller killed themselves, so
+    // their own bar hits zero with the shatter. Targets are re-derived from
+    // game state every frame, so undo/redo/reopen stay consistent for free.
+    private float  _hp1Display = 1f, _hp2Display = 1f;
+    private float  _hp1Ghost   = 1f, _hp2Ghost   = 1f; // damage trail, drains slower
+    private double _lastHpAnimTime;
+
     // Fragment layout for shatter: (u, v, w, h) normalized within box + velocity (px/s)
     private static readonly (float u, float v, float w, float h, float vx, float vy)[] Frags =
     [
@@ -87,14 +96,21 @@ public sealed class BattleRenderer : IDisposable
         if (game.Rolls.Count == 0)
         {
             if (game.VenueName != "Test Mode") _testMode = false;
-            _deathStart  = -999;
-            _swingStart  = -999;
-            _flinchStart = -999;
-            _parryStart  = -999;
-            _lastGame    = null;
+            CancelAnimations();
         }
 
-        if (game.Rolls.Count > _lastRollCount)
+        // A live game can never have a death armed (completion nulls ActiveGame),
+        // so death state here means undo/reopen rolled time backwards — cancel
+        // everything so the "dead" player respawns with their HP bar.
+        if (_deathPending || _deathStart > 0)
+        {
+            CancelAnimations();
+            _lastRollCount = game.Rolls.Count; // suppress the swing replay below
+        }
+
+        // Trigger attack only on a single new roll — a count jump (reopen) is
+        // state restoration, not an attack to animate.
+        if (game.Rolls.Count == _lastRollCount + 1)
         {
             var latestRoll = game.Rolls[^1];
             bool isP1 = string.Equals(latestRoll.PlayerName, game.Player1Name,
@@ -116,6 +132,24 @@ public sealed class BattleRenderer : IDisposable
             }
         }
         _lastRollCount = game.Rolls.Count;
+    }
+
+    private void CancelAnimations()
+    {
+        _swingPending = _flinchPending = _parryPending = _deathPending = false;
+        _swingStart   = _flinchStart   = _parryStart   = _deathStart   = -999;
+        _lastGame     = null;
+    }
+
+    /// <summary>Returns the scene to its idle state: animations cancelled,
+    /// HP bars refilled, test mode cleared.</summary>
+    public void ResetScene()
+    {
+        CancelAnimations();
+        _testMode      = false;
+        _lastRollCount = 0;
+        _hp1Display = _hp2Display = 1f;
+        _hp1Ghost   = _hp2Ghost   = 1f;
     }
 
     private void OnGameEnd(DeathrollGame game)
@@ -189,13 +223,26 @@ public sealed class BattleRenderer : IDisposable
             float p1Flinch = (_flinchStart > 0 &&  _flinchIsP1) ? flinchFrac : 0f;
             float p2Flinch = (_flinchStart > 0 && !_flinchIsP1) ? flinchFrac : 0f;
 
+            // HP animation — guard dt so the shared tab+popup double-draw
+            // doesn't advance the animation twice per frame
+            float dt = (float)Math.Max(now - _lastHpAnimTime, 0);
+            if (dt > 0)
+            {
+                dt = Math.Min(dt, 0.1f); // clamp hitches
+                AnimateHp(ref _hp1Display, ref _hp1Ghost, TargetHp(displayGame, true),  dt);
+                AnimateHp(ref _hp2Display, ref _hp2Ghost, TargetHp(displayGame, false), dt);
+                _lastHpAnimTime = now;
+            }
+
             DrawFighter(dl, origin, cw, ch, displayGame, isP1: true,
                 p1Swing, p1Flinch, parryFrac,
-                (_deathStart > 0 &&  _deathIsP1) ? deathT : 0f);
+                (_deathStart > 0 &&  _deathIsP1) ? deathT : 0f,
+                _hp1Display, _hp1Ghost);
 
             DrawFighter(dl, origin, cw, ch, displayGame, isP1: false,
                 p2Swing, p2Flinch, parryFrac,
-                (_deathStart > 0 && !_deathIsP1) ? deathT : 0f);
+                (_deathStart > 0 && !_deathIsP1) ? deathT : 0f,
+                _hp2Display, _hp2Ghost);
 
             DrawVsLabel(dl, origin, cw, ch, displayGame);
 
@@ -216,6 +263,44 @@ public sealed class BattleRenderer : IDisposable
             DrawOutcomeStrip(_lastGame);
         else
             DrawTestStartButton();
+    }
+
+    // ── HP model ──────────────────────────────────────────────────────────
+
+    private static float TargetHp(DeathrollGame game, bool isP1)
+    {
+        string name = isP1 ? game.Player1Name : game.Player2Name;
+
+        // The fatal 1 kills the roller — their own bar empties (with the shatter)
+        if (game.Status == GameStatus.Completed &&
+            string.Equals(game.LoserName, name, StringComparison.OrdinalIgnoreCase))
+            return 0f;
+
+        if (game.StartingNumber <= 0) return 1f;
+
+        // HP = the max this player faces: the opponent's last roll ÷ starting
+        // number. The fatal roll is excluded so the winner's bar doesn't also
+        // collapse to 1/start when the game ends.
+        var oppRoll = game.Rolls.LastOrDefault(r =>
+            !string.Equals(r.PlayerName, name, StringComparison.OrdinalIgnoreCase) && !r.IsGameOver);
+
+        return oppRoll == null
+            ? 1f
+            : Math.Clamp((float)oppRoll.RolledValue / game.StartingNumber, 0f, 1f);
+    }
+
+    // Live bar eases quickly toward the target; the ghost trail holds, then
+    // drains at a constant rate behind it — fighting-game damage trail.
+    private static void AnimateHp(ref float display, ref float ghost, float target, float dt)
+    {
+        display = target > display
+            ? Math.Min(display + dt * 2.5f, target)                  // refill (new game / undo): quick sweep
+            : display + (target - display) * Math.Min(dt * 9f, 1f);  // damage: fast ease-out
+        if (Math.Abs(target - display) < 0.001f) display = target;
+
+        ghost = ghost < display
+            ? display                                   // never behind the live bar
+            : Math.Max(ghost - dt * 0.30f, display);    // slow constant drain
     }
 
     // ── Canvas background ─────────────────────────────────────────────────
@@ -258,7 +343,8 @@ public sealed class BattleRenderer : IDisposable
 
     private static void DrawFighter(ImDrawListPtr dl, Vector2 o, float cw, float ch,
         DeathrollGame game, bool isP1,
-        float swingFrac, float flinchFrac, float parryFrac, float deathT)
+        float swingFrac, float flinchFrac, float parryFrac, float deathT,
+        float hpFrac, float hpGhost)
     {
         const float boxW   = 140f;
         const float boxH   = 36f;
@@ -328,7 +414,7 @@ public sealed class BattleRenderer : IDisposable
         if (deathT > 0)
             DrawShatterBox(dl, boxMin, boxW, boxH, boxColor, deathT);
         else
-            DrawNameBox(dl, boxMin, boxMax, name, teamColor, isTurn);
+            DrawNameBox(dl, boxMin, boxMax, name, teamColor, isTurn, hpFrac, hpGhost);
 
         // ── Roll value box ───────────────────────────────────────────────
         if (deathT <= 0)
@@ -394,16 +480,38 @@ public sealed class BattleRenderer : IDisposable
             Theme.ToU32(Theme.Danger with { W = flash }), txt);
     }
 
-    // ── Name box ──────────────────────────────────────────────────────────
+    // ── Name box / HP bar ─────────────────────────────────────────────────
 
     private static void DrawNameBox(ImDrawListPtr dl, Vector2 min, Vector2 max,
-        string name, Vector4 teamColor, bool isTurn)
+        string name, Vector4 teamColor, bool isTurn, float hpFrac, float hpGhost)
     {
         float w = max.X - min.X;
         float h = max.Y - min.Y;
 
-        dl.AddRectFilled(min, max,
-            Theme.ToU32(isTurn ? teamColor with { W = 0.18f } : Theme.CardBg), 5f);
+        // Empty-bar background
+        dl.AddRectFilled(min, max, Theme.ToU32(Theme.CardBg), 5f);
+
+        // Ghost trail — pale red segment lagging behind the live bar after damage
+        if (hpGhost > hpFrac + 0.003f)
+        {
+            var gMin = new Vector2(min.X + w * hpFrac, min.Y);
+            var gMax = new Vector2(min.X + w * Math.Min(hpGhost, 1f), max.Y);
+            dl.AddRectFilled(gMin, gMax, Theme.ToU32(Theme.Danger with { W = 0.40f }),
+                hpGhost > 0.97f ? 5f : 0f, ImDrawFlags.RoundCornersRight);
+        }
+
+        // Live HP fill — danger-gradient tint, pulsing when critical
+        if (hpFrac > 0.003f)
+        {
+            var   fill = Theme.DangerGradient(1f - hpFrac);
+            float a    = hpFrac < 0.25f
+                ? 0.40f + (float)(Math.Sin(ImGui.GetTime() * 6.0) * 0.5 + 0.5) * 0.35f
+                : 0.55f;
+            dl.AddRectFilled(min, new Vector2(min.X + w * hpFrac, max.Y),
+                Theme.ToU32(fill with { W = a }), 5f,
+                hpFrac > 0.97f ? ImDrawFlags.RoundCornersAll : ImDrawFlags.RoundCornersLeft);
+        }
+
         dl.AddRect(min, max,
             Theme.ToU32(isTurn ? teamColor : Theme.CardBorder), 5f, ImDrawFlags.None, isTurn ? 2f : 1f);
 
@@ -416,7 +524,7 @@ public sealed class BattleRenderer : IDisposable
         var   ts    = ImGui.CalcTextSize(name);
         float scale = ts.X > w - 8f ? (w - 8f) / ts.X : 1f;
         dl.AddText(min + new Vector2((w - ts.X * scale) * 0.5f, (h - ts.Y) * 0.5f),
-            Theme.ToU32(isTurn ? teamColor : Theme.Muted), name);
+            Theme.ToU32(isTurn ? Theme.White : Theme.Muted), name);
     }
 
     // ── Shatter box ───────────────────────────────────────────────────────
@@ -631,7 +739,7 @@ public sealed class BattleRenderer : IDisposable
         _gameState.TryAddRoll(game.CurrentPlayerTurn, roll, game.CurrentMax);
     }
 
-    private static void DrawOutcomeStrip(DeathrollGame game)
+    private void DrawOutcomeStrip(DeathrollGame game)
     {
         ImGui.Spacing();
         float avail = ImGui.GetContentRegionAvail().X;
@@ -644,5 +752,17 @@ public sealed class BattleRenderer : IDisposable
         string loser = $"💀  {game.LoserName} rolled 1";
         ImGui.SetCursorPosX((avail - ImGui.CalcTextSize(loser).X) * 0.5f);
         ImGui.TextColored(Theme.Danger, loser);
+
+        ImGui.Spacing();
+        const float btnW = 160f;
+        ImGui.SetCursorPosX((avail - btnW) * 0.5f);
+        ImGui.PushStyleColor(ImGuiCol.Button,        Theme.ToU32(Theme.Muted with { W = 0.15f }));
+        ImGui.PushStyleColor(ImGuiCol.ButtonHovered, Theme.ToU32(Theme.Muted with { W = 0.25f }));
+        ImGui.PushStyleColor(ImGuiCol.ButtonActive,  Theme.ToU32(Theme.Muted with { W = 0.35f }));
+        if (ImGui.Button("⟲ Reset Battle", new Vector2(btnW, 26f)))
+            ResetScene();
+        ImGui.PopStyleColor(3);
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip("Clear the scene and respawn the fighters\n(the finished game stays in History)");
     }
 }

@@ -63,8 +63,11 @@ public class ChatMonitorService : IDisposable
         var playerName = string.Equals(rawName, "You", StringComparison.OrdinalIgnoreCase)
             ? (Plugin.PlayerState.CharacterName ?? rawName)
             : rawName;
-        var rolled     = int.Parse(match.Groups[2].Value);
-        var outOf      = int.Parse(match.Groups[3].Value);
+        // TryParse: monitored text channels (Say/Party/etc.) can contain
+        // player-TYPED fake roll messages — an oversized number must not
+        // throw inside the chat hook. Real /random rolls always fit an int.
+        if (!int.TryParse(match.Groups[2].Value, out var rolled) ||
+            !int.TryParse(match.Groups[3].Value, out var outOf)) return;
 
         log.Debug($"[DeathrollManager] Parsed: {playerName} rolled {rolled} out of {outOf}");
 

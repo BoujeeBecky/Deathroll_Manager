@@ -144,7 +144,8 @@ public class TournamentRelayService : IDisposable
         _writeToken      = null;
         _champBroadcast  = false;
         _broadcastMatches.Clear();
-        ChatSender.Send(endMsg); // send END immediately on the game thread
+        if (BroadcastToChat)
+            ChatSender.Send(endMsg); // send END immediately, before the code is discarded
         log.Information("[DR Relay] Relay stopped");
         RelayStateChanged?.Invoke();
     }
@@ -255,7 +256,7 @@ public class TournamentRelayService : IDisposable
                 _pendingName       = parts[1];
                 _pendingStartNum   = int.TryParse(parts[2], out var sn) ? sn : 1000;
                 _pendingBet        = long.TryParse(parts[3], out var b)  ? b  : 0;
-                _expectedSlotCount = int.TryParse(parts[4], out var sc)  ? sc : 0;
+                _expectedSlotCount = int.TryParse(parts[4], out var sc) && sc is > 0 and <= 512 ? sc : 0;
                 _pendingVenue      = parts.Length >= 6 ? parts[5] : string.Empty;
                 _pendingLayout     = parts.Length >= 7 && parts[6] == "LR"
                     ? BracketLayout.LeftToRight : BracketLayout.VBracket;
@@ -312,7 +313,11 @@ public class TournamentRelayService : IDisposable
 
     private void ProcessSnapChunk(string[] parts)
     {
-        if (!int.TryParse(parts[1], out var idx) || !int.TryParse(parts[2], out var total) || total <= 0) return;
+        // total comes from untrusted chat — cap it so a hostile message can't
+        // demand a giant chunk array. 64 KB decompressed / 420-char chunks
+        // means a legitimate SNAP is always well under 200 chunks.
+        if (!int.TryParse(parts[1], out var idx) || !int.TryParse(parts[2], out var total)
+            || total <= 0 || total > 200) return;
 
         if (idx == 0)
             _snapChunks = new string?[total];
@@ -588,6 +593,11 @@ public class TournamentRelayService : IDisposable
 
     // ── Web sync ──────────────────────────────────────────────────────────
 
+    // Surfaced in the relay controls so hosts can see web sync health at a glance
+    // (failures used to be log-only — spectators could be watching a frozen bracket).
+    public DateTime? LastWebSyncAt { get; private set; }
+    public bool      LastWebSyncOk { get; private set; } = true;
+
     private async Task SyncToWebAsync(Tournament t)
     {
         if (_writeToken == null || RelayCode == null) return;
@@ -599,11 +609,15 @@ public class TournamentRelayService : IDisposable
             using var req = new HttpRequestMessage(HttpMethod.Put, url) { Content = content };
             req.Headers.TryAddWithoutValidation("X-Write-Token", _writeToken);
             using var resp = await _httpClient.SendAsync(req).ConfigureAwait(false);
+            LastWebSyncAt = DateTime.Now;
+            LastWebSyncOk = resp.IsSuccessStatusCode;
             if (!resp.IsSuccessStatusCode)
                 log.Warning($"[DR Relay] Web sync failed: {(int)resp.StatusCode}");
         }
         catch (Exception ex)
         {
+            LastWebSyncAt = DateTime.Now;
+            LastWebSyncOk = false;
             log.Warning(ex, "[DR Relay] Web sync error");
         }
     }

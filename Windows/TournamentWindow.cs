@@ -66,6 +66,16 @@ public class TournamentWindow : Window
     private string _reportText      = string.Empty;
     private bool   _openReportPopup;
 
+    // ── Bracket search ────────────────────────────────────────────────────
+    private string _searchFilter = string.Empty;
+
+    // ── Bracket repair UI state ───────────────────────────────────────────
+    private string? _renameOld;
+    private string  _renameInput = string.Empty;
+    private bool    _openRenamePopup;
+    private string? _repairMsg;
+    private double  _repairMsgUntil;
+
     // ── Default announcement macro templates ─────────────────────────────
     // Placeholders: {p1} {p2} {start} {first} {winner} {round} {match} {venue}
     private const string MacroCallUp     = "Next up: {p1} vs {p2}! Please make your way to the front.";
@@ -80,9 +90,13 @@ public class TournamentWindow : Window
     private const float Padding  = 14f;
     private const float LabelH   = 26f;
 
+    // Auto call-up dedup — (tournament, side, round, match) last announced
+    private (Guid, BracketSide, int, int)? _lastAutoCallUp;
+
     public TournamentWindow(Plugin plugin) : base("Tournament Bracket###DRTournament")
     {
         this.plugin = plugin;
+        plugin.TournamentService.TournamentStateChanged += OnAutoCallUp;
         newStarting    = plugin.Configuration.DefaultStartingNumber;
         _pendingLayout = plugin.Configuration.DefaultBracketLayout == BracketLayout.LeftToRight ? 1 : 0;
         _pendingFormat = plugin.Configuration.DefaultBracketFormat == BracketFormat.DoubleElim  ? 1 : 0;
@@ -116,6 +130,9 @@ public class TournamentWindow : Window
         DrawRelayControls(t, relay);
         ImGui.Separator();
 
+        if (_repairMsg != null && ImGui.GetTime() < _repairMsgUntil)
+            ImGui.TextColored(Theme.Warning, $"🔧 {_repairMsg}");
+
         if (t.IsComplete)
             DrawChampionBanner(t);
         else
@@ -125,6 +142,19 @@ public class TournamentWindow : Window
         }
 
         ImGui.Spacing();
+
+        // Bracket search — pulses matching boxes gold ("where is so-and-so?")
+        ImGui.SetNextItemWidth(170);
+        ImGui.InputTextWithHint("##bracketSearch", "🔍 find player…", ref _searchFilter, 32);
+        if (_searchFilter.Length > 0)
+        {
+            ImGui.SameLine();
+            if (ImGui.SmallButton("✕##clrSearch")) _searchFilter = string.Empty;
+            ImGui.SameLine();
+            int hits = t.EnumerateMatches().Count(m => !m.IsBye && MatchesSearch(m));
+            ImGui.TextColored(hits > 0 ? Theme.Warning : Theme.Muted,
+                hits > 0 ? $"{hits} match(es) highlighted" : "no matches");
+        }
 
         float availH   = ImGui.GetContentRegionAvail().Y;
         float feedH    = Math.Min(180f, availH * 0.30f);
@@ -140,6 +170,7 @@ public class TournamentWindow : Window
         DrawRollFeed(t);
         DrawMatchDetailPopup();
         DrawFullReportPopup();
+        DrawRenamePopup();
     }
 
     // ── Header ────────────────────────────────────────────────────────────
@@ -198,9 +229,27 @@ public class TournamentWindow : Window
 
         ImGui.SameLine();
         if (ImGui.SmallButton("Cancel Tournament"))
+            ImGui.OpenPopup("##confirmCancelT");
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip("Asks for confirmation first");
+
+        if (ImGui.BeginPopup("##confirmCancelT"))
         {
-            TournamentSvc.CancelTournament();
-            _testMode = false;
+            ImGui.TextColored(Theme.Warning, "Cancel this tournament?");
+            ImGui.TextColored(Theme.Muted, "The entire bracket will be lost — this cannot be undone.");
+            ImGui.Spacing();
+            ImGui.PushStyleColor(ImGuiCol.Button, Theme.ToU32(Theme.Danger with { W = 0.35f }));
+            if (ImGui.Button("Yes, cancel it", new Vector2(120, 0)))
+            {
+                TournamentSvc.CancelTournament();
+                _testMode = false;
+                ImGui.CloseCurrentPopup();
+            }
+            ImGui.PopStyleColor();
+            ImGui.SameLine();
+            if (ImGui.Button("Keep playing", new Vector2(120, 0)))
+                ImGui.CloseCurrentPopup();
+            ImGui.EndPopup();
         }
     }
 
@@ -279,6 +328,26 @@ public class TournamentWindow : Window
         }
     }
 
+    // Announces the next pairing the moment it becomes ready (match completes,
+    // byes resolve, or the tournament starts). Skipped in test mode — Sim All
+    // would flood the announcement channel.
+    private void OnAutoCallUp()
+    {
+        if (!plugin.Configuration.AutoCallUp || _testMode) return;
+        var t = TournamentSvc.ActiveTournament;
+        if (t == null || t.IsComplete) return;
+
+        var m = t.CurrentMatch;
+        if (m == null || m.Status != MatchStatus.Pending || !m.BothPlayersReady) return;
+
+        var key = (t.Id, m.Side, m.RoundIndex, m.MatchIndex);
+        if (_lastAutoCallUp == key) return;
+        _lastAutoCallUp = key;
+
+        string cmd = Configuration.MCChannelCommand(plugin.Configuration.MCAnnouncementChannel);
+        ChatSender.Send($"{cmd} {FormatMacro(MacroCallUp, m, t)}");
+    }
+
     // ── MC Controls ───────────────────────────────────────────────────────
 
     private void DrawMCControls(Tournament t)
@@ -304,6 +373,16 @@ public class TournamentWindow : Window
         }
         if (ImGui.IsItemHovered())
             ImGui.SetTooltip("Channel for MC announcements\n(Relay protocol always uses /say regardless)");
+
+        ImGui.SameLine();
+        bool autoCU = plugin.Configuration.AutoCallUp;
+        if (ImGui.Checkbox("Auto📢##autoCallUp", ref autoCU))
+        {
+            plugin.Configuration.AutoCallUp = autoCU;
+            plugin.Configuration.Save();
+        }
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip("Automatically announce Call Up whenever the next match\nbecomes ready (saves a click per match). Off in test mode.");
 
         ImGui.SameLine();
         if (hasMatch)
@@ -435,10 +514,17 @@ public class TournamentWindow : Window
             ImGui.SetClipboardText(FormatMacro(MacroWinner, lastDone, t, winner: lastDone?.Winner));
         if (ImGui.IsItemHovered()) ImGui.SetTooltip("Copy to clipboard");
 
-        // ── Manual roll entry for the live match ──────────────────────────
-        if (match?.Status == MatchStatus.InProgress && plugin.GameState.ActiveGame != null)
+        // ── Live match extras: timer, nudge, manual roll entry ────────────
+        if (match?.Status == MatchStatus.InProgress && plugin.GameState.ActiveGame is { } liveGame)
         {
             ImGui.Spacing();
+            if (RollTimer.DrawInline(plugin.Configuration, liveGame))
+                ImGui.SameLine();
+            MCButton("⏰ Nudge##MCNudge", true, Theme.Warning, () =>
+                ChatSender.Send($"{cmd} {liveGame.CurrentPlayerTurn} — /random {liveGame.CurrentMax} when you're ready! ⏰"));
+            if (ImGui.IsItemHovered())
+                ImGui.SetTooltip($"Remind {liveGame.CurrentPlayerTurn} it's their roll");
+
             ManualRollEntry.Draw(plugin.GameState, "MC");
         }
 
@@ -472,6 +558,10 @@ public class TournamentWindow : Window
         ImGui.Spacing();
         ImGui.TreePop();
     }
+
+    private bool MatchesSearch(TournamentMatch m) =>
+        (m.Player1?.Contains(_searchFilter, StringComparison.OrdinalIgnoreCase) ?? false) ||
+        (m.Player2?.Contains(_searchFilter, StringComparison.OrdinalIgnoreCase) ?? false);
 
     private static void DrawFirstRollerPick(TournamentService svc, TournamentMatch match,
         string player, Vector4 color)
@@ -583,11 +673,34 @@ public class TournamentWindow : Window
             ImGui.SameLine();
             bool broadcastToChat = relay.BroadcastToChat;
             if (ImGui.Checkbox("📡/say##RelayChat", ref broadcastToChat))
+            {
                 relay.BroadcastToChat = broadcastToChat;
+                plugin.Configuration.RelayBroadcastToChat = broadcastToChat;
+                plugin.Configuration.Save();
+            }
             if (ImGui.IsItemHovered())
                 ImGui.SetTooltip(
                     "Broadcast bracket updates via /say (required for in-game spectators)\n" +
                     "Uncheck to use web viewer only — no /say messages will appear in chat");
+
+            // Web sync health — failures used to be invisible outside the log
+            if (relay.LastWebSyncAt.HasValue)
+            {
+                ImGui.SameLine();
+                if (relay.LastWebSyncOk)
+                {
+                    int ago = (int)(DateTime.Now - relay.LastWebSyncAt.Value).TotalSeconds;
+                    ImGui.TextColored(Theme.WinGreen, $"✓{ago}s");
+                    if (ImGui.IsItemHovered())
+                        ImGui.SetTooltip($"Web viewer synced {ago}s ago");
+                }
+                else
+                {
+                    ImGui.TextColored(Theme.Danger, "⚠ web");
+                    if (ImGui.IsItemHovered())
+                        ImGui.SetTooltip("Last web sync FAILED — the web viewer may be stale.\nCheck your connection, then press ⟳ Resync.");
+                }
+            }
 
             ImGui.SameLine();
             ImGui.PushStyleColor(ImGuiCol.Button,        Theme.ToU32(Theme.Danger with { W = 0.18f }));
@@ -1439,6 +1552,14 @@ public class TournamentWindow : Window
             dl.AddRect(topLeft - new Vector2(2, 2), botRight + new Vector2(2, 2),
                 Theme.ToU32(Theme.Gold with { W = pulseAlpha * 0.4f }), 7f, ImDrawFlags.None, 1f);
 
+        // Search highlight
+        if (_searchFilter.Length > 0 && !match.IsBye && MatchesSearch(match))
+        {
+            float sp = 0.5f + (float)(Math.Sin(ImGui.GetTime() * 5.0) * 0.5);
+            dl.AddRect(topLeft - new Vector2(3, 3), botRight + new Vector2(3, 3),
+                Theme.ToU32(Theme.Warning with { W = 0.35f + sp * 0.5f }), 8f, ImDrawFlags.None, 2.5f);
+        }
+
         // Row divider
         DrawThickLine(dl,
             new Vector2(topLeft.X + 5,  midLeft.Y),
@@ -1476,18 +1597,22 @@ public class TournamentWindow : Window
             match.IsCompleted && match.Winner != match.Player2,
             match.IsBye);
 
-        // Interaction (skipped in spectator/read-only mode — no game records, no force winner)
+        // Interaction (skipped in spectator/read-only mode — no game records, no repairs)
         if (!readOnly)
         {
+            // Side is part of the ID — double-elim WB/LB matches share round/match indices
+            string ctxId = $"##ctx_{match.Side}_{match.RoundIndex}_{match.MatchIndex}";
             ImGui.SetCursorScreenPos(topLeft);
-            ImGui.InvisibleButton($"##m_{match.RoundIndex}_{match.MatchIndex}", size);
+            ImGui.InvisibleButton($"##m_{match.Side}_{match.RoundIndex}_{match.MatchIndex}", size);
             if (ImGui.IsItemHovered())
             {
                 ImGui.BeginTooltip();
                 if (match.IsCompleted && match.GameId.HasValue)
-                    ImGui.TextColored(Theme.Muted, "Click to view roll history");
-                else if (!match.IsCompleted && !match.IsBye)
-                    ImGui.TextColored(Theme.Muted, "Right-click to force a winner");
+                    ImGui.TextColored(Theme.Muted, "Click: roll history  ·  Right-click: repair");
+                else if (match.IsCompleted)
+                    ImGui.TextColored(Theme.Muted, "Right-click to repair (clear result / rename)");
+                else if (!match.IsBye)
+                    ImGui.TextColored(Theme.Muted, "Right-click: force winner / rename");
                 ImGui.EndTooltip();
             }
             if (ImGui.IsItemClicked(ImGuiMouseButton.Left) && match.IsCompleted && match.GameId.HasValue)
@@ -1495,19 +1620,104 @@ public class TournamentWindow : Window
                 pendingDetailMatch = match;
                 ImGui.OpenPopup("##matchDetail");
             }
-            if (ImGui.IsItemClicked(ImGuiMouseButton.Right) && !match.IsCompleted && !match.IsBye && match.BothPlayersReady)
-                ImGui.OpenPopup($"##force_{match.RoundIndex}_{match.MatchIndex}");
+            if (ImGui.IsItemClicked(ImGuiMouseButton.Right) && !match.IsBye &&
+                (match.BothPlayersReady || match.IsCompleted))
+                ImGui.OpenPopup(ctxId);
 
-            if (ImGui.BeginPopup($"##force_{match.RoundIndex}_{match.MatchIndex}"))
+            if (ImGui.BeginPopup(ctxId))
             {
-                ImGui.TextColored(Theme.Warning, "Force winner:");
-                if (match.Player1 != null && ImGui.Selectable(match.Player1))
-                    TournamentSvc.ForceWinner(match, match.Player1);
-                if (match.Player2 != null && ImGui.Selectable(match.Player2))
-                    TournamentSvc.ForceWinner(match, match.Player2);
+                if (!match.IsCompleted && match.BothPlayersReady)
+                {
+                    ImGui.TextColored(Theme.Warning, "Force winner:");
+                    if (match.Player1 != null && ImGui.Selectable($"★ {match.Player1}##fw1"))
+                        TournamentSvc.ForceWinner(match, match.Player1);
+                    if (match.Player2 != null && ImGui.Selectable($"★ {match.Player2}##fw2"))
+                        TournamentSvc.ForceWinner(match, match.Player2);
+                    ImGui.Separator();
+                }
+
+                if (match.IsCompleted)
+                {
+                    ImGui.TextColored(Theme.Warning, $"Result: {match.Winner} won");
+                    if (ImGui.Selectable("↶ Clear this result"))
+                    {
+                        int dropped = TournamentSvc.ClearMatchResult(match);
+                        _repairMsg      = dropped > 0
+                            ? $"Result cleared — {dropped} downstream result(s) also reverted to pending."
+                            : "Result cleared.";
+                        _repairMsgUntil = ImGui.GetTime() + 8.0;
+                    }
+                    if (ImGui.IsItemHovered())
+                        ImGui.SetTooltip("Reverts this match to pending.\nDownstream results that depended on the winner also revert.\nSpectators/web are resynced automatically.");
+                    ImGui.Separator();
+                }
+
+                ImGui.TextColored(Theme.Muted, "Rename player:");
+                foreach (var p in new[] { match.Player1, match.Player2 })
+                {
+                    if (p == null || p == "BYE") continue;
+                    if (ImGui.Selectable($"✎ {p}##rn{p}"))
+                    {
+                        _renameOld       = p;
+                        _renameInput     = p;
+                        _openRenamePopup = true;
+                    }
+                }
                 ImGui.EndPopup();
             }
         }
+    }
+
+    // ── Rename popup ──────────────────────────────────────────────────────
+
+    private void DrawRenamePopup()
+    {
+        if (_openRenamePopup)
+        {
+            ImGui.OpenPopup("##renamePlayer");
+            _openRenamePopup = false;
+        }
+        if (!ImGui.BeginPopup("##renamePlayer")) return;
+
+        ImGui.TextColored(Theme.Gold, $"Rename: {_renameOld}");
+        ImGui.TextColored(Theme.Muted, "Updates the whole bracket and any live game.\nSpectators/web are resynced automatically.");
+        ImGui.Spacing();
+
+        ImGui.SetNextItemWidth(220);
+        bool enter = ImGui.InputText("##renameIn", ref _renameInput, 64,
+            ImGuiInputTextFlags.EnterReturnsTrue);
+
+        var  newName = _renameInput.Trim();
+
+        // A name already seated elsewhere would make winner resolution ambiguous.
+        // Comparing against _renameOld case-insensitively still allows pure
+        // capitalization fixes (e.g. "alice smith" → "Alice Smith").
+        bool taken = !string.Equals(newName, _renameOld, StringComparison.OrdinalIgnoreCase) &&
+                     TournamentSvc.ActiveTournament?.EnumerateMatches().Any(m =>
+                         string.Equals(m.Player1, newName, StringComparison.OrdinalIgnoreCase) ||
+                         string.Equals(m.Player2, newName, StringComparison.OrdinalIgnoreCase)) == true;
+        if (taken)
+            ImGui.TextColored(Theme.Danger, $"\"{newName}\" is already in the bracket.");
+
+        bool valid = _renameOld != null && newName.Length > 0 && !taken &&
+                     !string.Equals(newName, "BYE", StringComparison.OrdinalIgnoreCase) &&
+                     newName != _renameOld;
+
+        if (!valid) ImGui.BeginDisabled();
+        bool apply = ImGui.Button("Apply", new Vector2(80, 0)) || (enter && valid);
+        if (!valid) ImGui.EndDisabled();
+        if (apply && valid)
+        {
+            TournamentSvc.RenamePlayer(_renameOld!, newName);
+            _repairMsg      = $"Renamed {_renameOld} → {newName}.";
+            _repairMsgUntil = ImGui.GetTime() + 8.0;
+            ImGui.CloseCurrentPopup();
+        }
+        ImGui.SameLine();
+        if (ImGui.Button("Cancel", new Vector2(80, 0)))
+            ImGui.CloseCurrentPopup();
+
+        ImGui.EndPopup();
     }
 
     private static void DrawPlayerInBox(ImDrawListPtr dl, Vector2 rowOrigin, Vector2 rowSize,
@@ -1821,7 +2031,21 @@ public class TournamentWindow : Window
         // Clear / Shuffle / Copy row
         if (playerList.Count > 0)
         {
-            if (ImGui.SmallButton("Clear all")) { playerList.Clear(); duplicateWarning = null; importResult = null; }
+            if (ImGui.SmallButton("Clear all"))
+                ImGui.OpenPopup("##confirmClearAll");
+            if (ImGui.BeginPopup("##confirmClearAll"))
+            {
+                ImGui.TextColored(Theme.Warning, $"Remove all {playerList.Count} players?");
+                if (ImGui.Button("Yes, clear", new Vector2(100, 0)))
+                {
+                    playerList.Clear(); duplicateWarning = null; importResult = null;
+                    ImGui.CloseCurrentPopup();
+                }
+                ImGui.SameLine();
+                if (ImGui.Button("Keep them", new Vector2(100, 0)))
+                    ImGui.CloseCurrentPopup();
+                ImGui.EndPopup();
+            }
             ImGui.SameLine();
             if (ImGui.SmallButton("Shuffle"))
             {

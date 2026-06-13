@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Concurrent;
 using System.Text;
 using FFXIVClientStructs.FFXIV.Client.System.String;
 using FFXIVClientStructs.FFXIV.Client.UI;
@@ -14,6 +15,26 @@ public static class ChatSender
 {
     /// <summary>Sends /random [max] on behalf of the local player.</summary>
     public static void SendRandom(int max) => Send($"/random {max}");
+
+    // ── Paced queue — multi-message macros ───────────────────────────────
+    // 2s spacing mirrors Shoutmaker's "/wait 2" flood-safety default.
+
+    private static readonly ConcurrentQueue<string> PacedQueue = new();
+    private static long _lastPacedSendMs;
+
+    /// <summary>Queues a message for paced sending (~one per 2s).</summary>
+    public static void EnqueuePaced(string text) => PacedQueue.Enqueue(text);
+
+    /// <summary>Drains one queued message per 2s. Called from Framework.Update.</summary>
+    public static void PumpQueue()
+    {
+        if (PacedQueue.IsEmpty) return;
+        long now = Environment.TickCount64;
+        if (now - _lastPacedSendMs < 2000) return;
+        if (!PacedQueue.TryDequeue(out var msg)) return;
+        _lastPacedSendMs = now;
+        Send(msg);
+    }
 
     public static unsafe void Send(string text)
     {
