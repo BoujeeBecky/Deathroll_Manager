@@ -1,27 +1,20 @@
-# Macros and Themes and MORE! OH MY! 🎲
+# The Name Keeps Coming Back 👻 (not anymore!)
 
-We heard you like clicking buttons, SO I ADDED BUTTONS! Hehehehe
+You know the one. Far end of the club. Client only catches ONE of the two intro rolls. Plugin goes: "I know exactly who goes first" and *will not stop* putting that name in the box. You backspace it. It comes back. You backspace it again. It comes back AGAIN. Every. Single. Frame.
+
+We fixed it. You're welcome. Here's everything:
 
 ## ✨ Headliners
 
-- **WE GOT THEMES BABY!** — be **Boujee**, get **Opulent**, ride the **Synthwave**, or slip on the **Banana**. Applies instantly to every window. Danger red stays red in all of them — we're not monsters. 😁😅
-- **HP battle bars** — the Battle tab fighters now have proper draining health bars with fighting-game damage trails. Your roll is an attack on your opponent's bar… but roll a 1 and you drain your **own**, as the dice peeps intended. 💀
-- **Macros tab** — build and store your own chat lines ("OH! THAT WAS A BIG HIT!") and fire them with one click. Long text auto-splits at word boundaries (a pocket Shoutmaker), sends are flood-safe, and Copy exports a paste-ready FFXIV User Macro.
-- **Bracket Repair Kit** — recorded the wrong winner? Typo'd a name? Right-click any match: **clear the result** (downstream matches revert automatically) or **rename the player** everywhere at once. Spectators and the web bracket resync on their own. Hosts, breathe.
+- **The haunted name box is exorcised** — detected rolls still pre-fill Player 1 for speed, but *once*. Backspace it and it stays gone. Revolutionary technology.
+- **→ Player 1 / → Player 2 / ✕ Dismiss** — was the detected roller actually the *second* person? One button moves them to the right slot. The other button tells the card to shoo. You are in control of your own plugin now.
+- **Clear button** — wipes the whole setup form in one click. Venue stays. Everything else: gone. Fresh start, no drama.
+- **Manual roll-off pick** — running a roll-off from the wrong end of the venue and your client only caught one `/random 10`? Just click who won. No more being held hostage by a roll you'll never see.
+- **⇄ Swap who rolls first** — game started but the order is wrong? A swap button lives right in the turn indicator, pre-first-roll only. One click, corrected, on with the show.
+- **↻ Auto-swap note** — when the plugin silently reorders things on its own (it does that), a little label now tells you so you don't spend ten minutes wondering what happened.
 
 ## 🛠 Quality of life
 
-- **Auto📢 Call-Up** — announce each new pairing the moment it's ready, hands-free.
-- **Per-roll countdown timer** + an **⏰ Nudge** button for the… deliberate rollers.
-- **Sound cues** — FFXIV's own sounds on death rolls and champions (off by default).
-- **⚡ Rematch / 💰 Double or Nothing** buttons after every match. You know they'll ask.
-- **Web-sync health light** — see at a glance if the web bracket is fresh (✓) or sulking (⚠).
-- **🔍 Find player** — pulse-highlights someone's matches in big brackets.
-- **⟲ Reset Battle** button, a **⚙ settings gear** on the main window, persisted relay /say toggle, and a fully updated Help tab (including the new Macros section).
-
-## 🐛 Fixes & hardening
-
-- Undo/redo now resurrects the fallen in the Battle window. Necromancy, but sanctioned.
-- Spoofed or absurd "roll" messages typed in chat can no longer upset the parser.
-- Relay sync messages from untrusted senders are capped and validated harder (they were already validated — now they're validated *with prejudice*).
-- Stopping a web-only relay no longer leaks a single farewell /say.
+- **My Stats now finds you** — first-name-only history entries now show up in your personal stats like they should've all along. The leaderboard was being weirdly literal about this.
+- Undo correctly walks back the auto-swap, redo puts it back, undo again takes it away. We went very far into this rabbit hole so you don't have to.
+- Anonymous event handlers now properly say goodbye when the plugin unloads. You would never have noticed. We noticed.

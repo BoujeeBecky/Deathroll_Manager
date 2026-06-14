@@ -1,6 +1,6 @@
 <Project Sdk="Dalamud.NET.Sdk/15.0.0">
   <PropertyGroup>
-    <Version>1.2.0</Version>
+    <Version>1.2.5</Version>
     <Name>Deathroll Manager</Name>
     <Author>Boujee Becky</Author>
     <Punchline>Track and run Deathroll games at FFXIV venues with live danger meters, battle animations, and tournament brackets.</Punchline>
