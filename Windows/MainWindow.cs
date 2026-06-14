@@ -835,17 +835,17 @@ public class MainWindow : Window
         var localName = Plugin.PlayerState.CharacterName!;
 
         var myGames = completed
-            .Where(g => string.Equals(g.Player1Name, localName, StringComparison.OrdinalIgnoreCase) ||
-                        string.Equals(g.Player2Name, localName, StringComparison.OrdinalIgnoreCase))
+            .Where(g => PlayerNames.Match(g.Player1Name, localName) ||
+                        PlayerNames.Match(g.Player2Name, localName))
             .ToList();
 
-        int   wins    = myGames.Count(g => string.Equals(g.WinnerName, localName, StringComparison.OrdinalIgnoreCase));
+        int   wins    = myGames.Count(g => PlayerNames.Match(g.WinnerName, localName));
         int   losses  = myGames.Count - wins;
         int   total   = myGames.Count;
         float winRate = total > 0 ? (float)wins / total : 0f;
-        long  gilWon  = myGames.Where(g => string.Equals(g.WinnerName, localName, StringComparison.OrdinalIgnoreCase))
+        long  gilWon  = myGames.Where(g => PlayerNames.Match(g.WinnerName, localName))
                                .Sum(g => g.BetAmount);
-        long  gilLost = myGames.Where(g => string.Equals(g.LoserName, localName, StringComparison.OrdinalIgnoreCase))
+        long  gilLost = myGames.Where(g => PlayerNames.Match(g.LoserName, localName))
                                .Sum(g => g.BetAmount);
         long  netGil  = gilWon - gilLost;
 
@@ -895,7 +895,7 @@ public class MainWindow : Window
             foreach (var v in venues)
             {
                 int vW = myGames.Count(g => string.Equals(g.VenueName, v, StringComparison.OrdinalIgnoreCase) &&
-                                            string.Equals(g.WinnerName, localName, StringComparison.OrdinalIgnoreCase));
+                                            PlayerNames.Match(g.WinnerName, localName));
                 int vT = myGames.Count(g => string.Equals(g.VenueName, v, StringComparison.OrdinalIgnoreCase));
                 ImGui.TextColored(Theme.White, $"  {v}");
                 ImGui.SameLine();
@@ -916,9 +916,9 @@ public class MainWindow : Window
 
         foreach (var game in myGames.Take(20))
         {
-            bool won      = string.Equals(game.WinnerName, localName, StringComparison.OrdinalIgnoreCase);
+            bool won      = PlayerNames.Match(game.WinnerName, localName);
             var  resCol   = won ? Theme.WinGreen : Theme.Danger;
-            string opponent = string.Equals(game.Player1Name, localName, StringComparison.OrdinalIgnoreCase)
+            string opponent = PlayerNames.Match(game.Player1Name, localName)
                 ? game.Player2Name : game.Player1Name;
 
             ImGui.TextColored(resCol, won ? "WIN " : "LOSS");
