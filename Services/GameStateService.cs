@@ -68,6 +68,18 @@ public class GameStateService
         StateChanged?.Invoke();
     }
 
+    // Host-driven manual swap of who rolls first. Guarded by the model to only
+    // act while no rolls exist, so it can never scramble recorded turns. Does
+    // NOT set FirstRollSwapped — a deliberate host choice shouldn't be auto-undone.
+    public bool SwapPlayers()
+    {
+        if (ActiveGame == null) return false;
+        if (!ActiveGame.SwapPlayers()) return false;
+        log.Information($"[DeathrollManager] Players swapped: {ActiveGame.Player1Name} now rolls first");
+        StateChanged?.Invoke();
+        return true;
+    }
+
     // Returns true if the roll was accepted into the active game
     public bool TryAddRoll(string playerName, int rolledValue, int maxValue)
     {
@@ -87,8 +99,8 @@ public class GameStateService
             if (ActiveGame.Status == GameStatus.WaitingForFirstRoll &&
                 NamesMatch(playerName, ActiveGame.Player2Name))
             {
-                (ActiveGame.Player1Name, ActiveGame.Player2Name) =
-                    (ActiveGame.Player2Name, ActiveGame.Player1Name);
+                ActiveGame.SwapPlayers();
+                ActiveGame.FirstRollSwapped = true;
                 log.Information($"[DeathrollManager] First roll came from {ActiveGame.Player1Name} — turn order swapped");
             }
             else
@@ -138,7 +150,16 @@ public class GameStateService
         ActiveGame.Rolls.RemoveAt(ActiveGame.Rolls.Count - 1);
         redoStack.Add(removed);
         if (ActiveGame.Rolls.Count == 0)
+        {
             ActiveGame.Status = GameStatus.WaitingForFirstRoll;
+            // Undoing across the first roll restores the original seating that the
+            // auto-swap flipped, so the original entry order comes back intact.
+            if (ActiveGame.FirstRollSwapped)
+            {
+                ActiveGame.SwapPlayers();
+                ActiveGame.FirstRollSwapped = false;
+            }
+        }
 
         log.Information($"[DeathrollManager] Roll undone: {removed.PlayerName} rolled {removed.RolledValue}");
         StateChanged?.Invoke();
@@ -153,10 +174,28 @@ public class GameStateService
 
         var roll = redoStack[^1];
 
+        // Redoing the first roll must reproduce the auto-swap the live roll
+        // produced (the matching undo reversed it). If this roll came from the
+        // player now seated second, re-apply the swap before validating so the
+        // redone state matches the original post-first-roll state exactly.
+        bool reSwapFirstRoll = ActiveGame.Rolls.Count == 0 &&
+                               NamesMatch(roll.PlayerName, ActiveGame.Player2Name);
+        if (reSwapFirstRoll)
+        {
+            ActiveGame.SwapPlayers();
+            ActiveGame.FirstRollSwapped = true;
+        }
+
         // Sanity check — should always hold, since new rolls clear the stack.
         if (roll.MaxValue != ActiveGame.CurrentMax ||
             !NamesMatch(roll.PlayerName, ActiveGame.CurrentPlayerTurn))
         {
+            // Roll back the speculative re-swap before bailing out.
+            if (reSwapFirstRoll)
+            {
+                ActiveGame.SwapPlayers();
+                ActiveGame.FirstRollSwapped = false;
+            }
             log.Warning("[DeathrollManager] Redo stack diverged from game state — clearing");
             redoStack.Clear();
             StateChanged?.Invoke();

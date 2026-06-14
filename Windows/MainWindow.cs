@@ -50,6 +50,7 @@ public class MainWindow : Window
     // ── Unmatched roll quick-start hint ───────────────────────────────────
     private string? hintPlayer;
     private int     hintMax;
+    private bool    hintApplied;
 
     public MainWindow(Plugin plugin) : base("Deathroll Manager###DRMain")
     {
@@ -113,9 +114,10 @@ public class MainWindow : Window
             }
         }
 
-        hintPlayer = playerName;
-        hintMax    = outOf;
-        IsOpen     = true;
+        hintPlayer   = playerName;
+        hintMax      = outOf;
+        hintApplied = false;
+        IsOpen       = true;
     }
 
     private void ClearSoloRollOff()
@@ -379,6 +381,26 @@ public class MainWindow : Window
 
         ImGui.Spacing();
 
+        float avail2 = ImGui.GetContentRegionAvail().X;
+        if (game.Status == GameStatus.WaitingForFirstRoll)
+        {
+            const string swapLabel = "⇄ Swap who rolls first";
+            float sw = ImGui.CalcTextSize(swapLabel).X + 16f;
+            ImGui.SetCursorPosX((avail2 - sw) * 0.5f);
+            if (ImGui.SmallButton(swapLabel))
+                GameState.SwapPlayers();
+            if (ImGui.IsItemHovered())
+                ImGui.SetTooltip($"Make {game.Player2Name} roll first instead of {game.Player1Name}.");
+            ImGui.Spacing();
+        }
+        else if (game.FirstRollSwapped && game.Rolls.Count <= 1)
+        {
+            string note = $"↻ turn order auto-set: {game.Player1Name} rolls first";
+            ImGui.SetCursorPosX((avail2 - ImGui.CalcTextSize(note).X) * 0.5f);
+            ImGui.TextColored(Theme.Muted, note);
+            ImGui.Spacing();
+        }
+
         // Determine if the local player is the one who needs to roll
         var localName = Plugin.PlayerState.CharacterName ?? string.Empty;
         bool isMyTurn = localName.Length > 0 &&
@@ -463,15 +485,37 @@ public class MainWindow : Window
             {
                 ImGui.TextColored(Theme.Warning, "⚡ Roll detected!");
                 ImGui.TextColored(Theme.White, $"{hintPlayer} rolled with a max of {hintMax:N0}.");
-                ImGui.TextColored(Theme.Muted, "Fill in the form below and click Start Game.");
+                ImGui.TextColored(Theme.Muted, "Choose a slot below, or just type the players in.");
                 ImGui.EndChild();
             }
             ImGui.PopStyleColor();
             ImGui.Spacing();
 
-            if (newPlayer1.Length == 0) newPlayer1 = hintPlayer;
+            // Pre-fill Player 1 once (the common case). Applied a single time so
+            // backspacing the field actually sticks instead of refilling every frame.
+            if (!hintApplied && newPlayer1.Trim().Length == 0)
+            {
+                newPlayer1   = hintPlayer;
+                hintApplied = true;
+            }
             if (newStarting == Config.DefaultStartingNumber && hintMax != Config.DefaultStartingNumber)
                 newStarting = hintMax;
+
+            // Explicit placement controls — fixes "they were actually the 2nd roller".
+            if (ImGui.SmallButton("→ Player 1##hintP1"))
+                newPlayer1 = hintPlayer;
+            ImGui.SameLine();
+            if (ImGui.SmallButton("→ Player 2##hintP2"))
+            {
+                var prev1  = newPlayer1.Trim();
+                newPlayer2 = hintPlayer;
+                if (string.Equals(prev1, hintPlayer, StringComparison.OrdinalIgnoreCase))
+                    newPlayer1 = string.Empty;
+            }
+            ImGui.SameLine();
+            if (ImGui.SmallButton("✕ Dismiss##hintX"))
+                hintPlayer = null;
+            ImGui.Spacing();
         }
 
         ImGui.TextColored(Theme.Gold, "Start New Game");
@@ -526,19 +570,30 @@ public class MainWindow : Window
             long bet = long.TryParse(newBetStr, out var b) ? Math.Max(b, 0) : 0;
             GameState.StartGame(p1, p2, newStarting, bet, newVenue.Trim());
             ClearSoloRollOff();
-            hintPlayer  = null;
-            newPlayer1  = newPlayer2 = string.Empty;
+            hintPlayer   = null;
+            hintApplied = false;
+            newPlayer1   = newPlayer2 = string.Empty;
             newStarting = Config.DefaultStartingNumber;
             newBetStr   = "0";
             // newVenue intentionally kept — likely still at same venue
         }
         if (!canStart) ImGui.EndDisabled();
+        ImGui.SameLine();
+        if (ImGui.Button("Clear", new Vector2(90, 0)))
+        {
+            newPlayer1  = newPlayer2 = string.Empty;
+            newStarting = Config.DefaultStartingNumber;
+            newBetStr   = "0";
+            hintPlayer  = null;
+            hintApplied = false;
+            ClearSoloRollOff();
+            // Venue intentionally kept — still at the same venue.
+        }
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip("Reset players, starting number, bet, roll-off, and any detected roll.\nVenue is kept.");
 
         if (_soloRollOffFirstRoller != null && canStart)
-        {
-            ImGui.SameLine();
-            ImGui.TextColored(Theme.WinGreen, $"{_soloRollOffFirstRoller} rolls first");
-        }
+            ImGui.TextColored(Theme.WinGreen, $"  {_soloRollOffFirstRoller} rolls first");
     }
 
     // ── Tournament Tab ────────────────────────────────────────────────────
@@ -780,17 +835,17 @@ public class MainWindow : Window
         var localName = Plugin.PlayerState.CharacterName!;
 
         var myGames = completed
-            .Where(g => string.Equals(g.Player1Name, localName, StringComparison.OrdinalIgnoreCase) ||
-                        string.Equals(g.Player2Name, localName, StringComparison.OrdinalIgnoreCase))
+            .Where(g => PlayerNames.Match(g.Player1Name, localName) ||
+                        PlayerNames.Match(g.Player2Name, localName))
             .ToList();
 
-        int   wins    = myGames.Count(g => string.Equals(g.WinnerName, localName, StringComparison.OrdinalIgnoreCase));
+        int   wins    = myGames.Count(g => PlayerNames.Match(g.WinnerName, localName));
         int   losses  = myGames.Count - wins;
         int   total   = myGames.Count;
         float winRate = total > 0 ? (float)wins / total : 0f;
-        long  gilWon  = myGames.Where(g => string.Equals(g.WinnerName, localName, StringComparison.OrdinalIgnoreCase))
+        long  gilWon  = myGames.Where(g => PlayerNames.Match(g.WinnerName, localName))
                                .Sum(g => g.BetAmount);
-        long  gilLost = myGames.Where(g => string.Equals(g.LoserName, localName, StringComparison.OrdinalIgnoreCase))
+        long  gilLost = myGames.Where(g => PlayerNames.Match(g.LoserName, localName))
                                .Sum(g => g.BetAmount);
         long  netGil  = gilWon - gilLost;
 
@@ -840,7 +895,7 @@ public class MainWindow : Window
             foreach (var v in venues)
             {
                 int vW = myGames.Count(g => string.Equals(g.VenueName, v, StringComparison.OrdinalIgnoreCase) &&
-                                            string.Equals(g.WinnerName, localName, StringComparison.OrdinalIgnoreCase));
+                                            PlayerNames.Match(g.WinnerName, localName));
                 int vT = myGames.Count(g => string.Equals(g.VenueName, v, StringComparison.OrdinalIgnoreCase));
                 ImGui.TextColored(Theme.White, $"  {v}");
                 ImGui.SameLine();
@@ -861,9 +916,9 @@ public class MainWindow : Window
 
         foreach (var game in myGames.Take(20))
         {
-            bool won      = string.Equals(game.WinnerName, localName, StringComparison.OrdinalIgnoreCase);
+            bool won      = PlayerNames.Match(game.WinnerName, localName);
             var  resCol   = won ? Theme.WinGreen : Theme.Danger;
-            string opponent = string.Equals(game.Player1Name, localName, StringComparison.OrdinalIgnoreCase)
+            string opponent = PlayerNames.Match(game.Player1Name, localName)
                 ? game.Player2Name : game.Player1Name;
 
             ImGui.TextColored(resCol, won ? "WIN " : "LOSS");
@@ -1021,6 +1076,29 @@ public class MainWindow : Window
             ImGui.TextColored(Theme.WinGreen, $"✓  {_soloRollOffFirstRoller} goes first!");
         else
             ImGui.TextColored(Theme.Muted, "Waiting for both players to roll...");
+
+        // Manual override — chat range can eat a /random 10, so let the host just
+        // click the winner instead of being stuck waiting for both rolls.
+        ImGui.Spacing();
+        ImGui.TextColored(Theme.Muted, "Missed a roll? Set who goes first:");
+
+        void Pick(string who)
+        {
+            if (who.Length == 0) return;
+            bool sel = string.Equals(_soloRollOffFirstRoller, who, StringComparison.OrdinalIgnoreCase);
+            ImGui.PushStyleColor(ImGuiCol.Button,
+                Theme.ToU32((sel ? Theme.WinGreen : Theme.Player1) with { W = sel ? 0.50f : 0.18f }));
+            if (ImGui.SmallButton($"{(sel ? "✓ " : "")}{who} first##solofirst{who}"))
+            {
+                _soloRollOffFirstRoller = who;
+                _soloRollOffTied        = false;
+            }
+            ImGui.PopStyleColor();
+        }
+
+        Pick(p1);
+        ImGui.SameLine();
+        Pick(p2);
 
         ImGui.Spacing();
         if (ImGui.SmallButton("Cancel Roll-off"))

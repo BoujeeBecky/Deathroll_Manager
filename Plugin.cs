@@ -47,19 +47,7 @@ public sealed class Plugin : IDalamudPlugin
 
         // Keep relay in sync with tournament state: send match results as they happen,
         // and stop the relay automatically if the tournament is cancelled.
-        TournamentService.TournamentStateChanged += () =>
-        {
-            var t = TournamentService.ActiveTournament;
-            RelayService.OnTournamentStateChanged(t);
-            if (t == null) RelayService.StopHostRelay();
-
-            // Champion fanfare (once per tournament)
-            if (t is { IsComplete: true } && _champSoundFor != t.Id)
-            {
-                _champSoundFor = t.Id;
-                if (Configuration.SoundCues) Helpers.SoundCue.Play(Helpers.SoundCue.Champion);
-            }
-        };
+        TournamentService.TournamentStateChanged += OnTournamentStateChanged;
 
         GameState.GameCompleted += OnGameCompletedSound;
 
@@ -74,11 +62,7 @@ public sealed class Plugin : IDalamudPlugin
         windowSystem.AddWindow(BattleWindow);
 
         // Auto-open the pop-out battle window when a new game starts (if setting enabled)
-        GameState.StateChanged += () =>
-        {
-            if (Configuration.PopOutBattlePanel && GameState.ActiveGame?.Rolls.Count == 0)
-                BattleWindow.IsOpen = true;
-        };
+        GameState.StateChanged += OnGameStateChanged;
 
         CommandManager.AddHandler("/dr", new CommandInfo(OnCommand)
         {
@@ -98,6 +82,26 @@ public sealed class Plugin : IDalamudPlugin
         ChatMonitor.UnmatchedRollDetected += mainWindow.OnUnmatchedRoll;
         ChatMonitor.UnmatchedRollDetected += OnUnmatchedRollForTournament;
         TournamentService.BracketRepaired += OnBracketRepaired;
+    }
+
+    private void OnTournamentStateChanged()
+    {
+        var t = TournamentService.ActiveTournament;
+        RelayService.OnTournamentStateChanged(t);
+        if (t == null) RelayService.StopHostRelay();
+
+        // Champion fanfare (once per tournament)
+        if (t is { IsComplete: true } && _champSoundFor != t.Id)
+        {
+            _champSoundFor = t.Id;
+            if (Configuration.SoundCues) Helpers.SoundCue.Play(Helpers.SoundCue.Champion);
+        }
+    }
+
+    private void OnGameStateChanged()
+    {
+        if (Configuration.PopOutBattlePanel && GameState.ActiveGame?.Rolls.Count == 0)
+            BattleWindow.IsOpen = true;
     }
 
     // Incremental MATCH dedup can't express cleared/renamed results — full resync.
@@ -129,10 +133,12 @@ public sealed class Plugin : IDalamudPlugin
 
     public void Dispose()
     {
-        ChatMonitor.UnmatchedRollDetected -= mainWindow.OnUnmatchedRoll;
-        ChatMonitor.UnmatchedRollDetected -= OnUnmatchedRollForTournament;
-        TournamentService.BracketRepaired -= OnBracketRepaired;
-        GameState.GameCompleted           -= OnGameCompletedSound;
+        ChatMonitor.UnmatchedRollDetected          -= mainWindow.OnUnmatchedRoll;
+        ChatMonitor.UnmatchedRollDetected          -= OnUnmatchedRollForTournament;
+        TournamentService.BracketRepaired          -= OnBracketRepaired;
+        TournamentService.TournamentStateChanged   -= OnTournamentStateChanged;
+        GameState.GameCompleted                    -= OnGameCompletedSound;
+        GameState.StateChanged                     -= OnGameStateChanged;
 
         Framework.Update -= OnFrameworkUpdate;
 
