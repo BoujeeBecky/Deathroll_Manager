@@ -593,10 +593,7 @@ public class MainWindow : Window
             ImGui.SetTooltip("Reset players, starting number, bet, roll-off, and any detected roll.\nVenue is kept.");
 
         if (_soloRollOffFirstRoller != null && canStart)
-        {
-            ImGui.SameLine();
-            ImGui.TextColored(Theme.WinGreen, $"{_soloRollOffFirstRoller} rolls first");
-        }
+            ImGui.TextColored(Theme.WinGreen, $"  {_soloRollOffFirstRoller} rolls first");
     }
 
     // ── Tournament Tab ────────────────────────────────────────────────────
