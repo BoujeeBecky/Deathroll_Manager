@@ -50,7 +50,7 @@ public class MainWindow : Window
     // ── Unmatched roll quick-start hint ───────────────────────────────────
     private string? hintPlayer;
     private int     hintMax;
-    private bool    _hintApplied;
+    private bool    hintApplied;
 
     public MainWindow(Plugin plugin) : base("Deathroll Manager###DRMain")
     {
@@ -116,7 +116,7 @@ public class MainWindow : Window
 
         hintPlayer   = playerName;
         hintMax      = outOf;
-        _hintApplied = false;
+        hintApplied = false;
         IsOpen       = true;
     }
 
@@ -381,6 +381,26 @@ public class MainWindow : Window
 
         ImGui.Spacing();
 
+        float avail2 = ImGui.GetContentRegionAvail().X;
+        if (game.Status == GameStatus.WaitingForFirstRoll)
+        {
+            const string swapLabel = "⇄ Swap who rolls first";
+            float sw = ImGui.CalcTextSize(swapLabel).X + 16f;
+            ImGui.SetCursorPosX((avail2 - sw) * 0.5f);
+            if (ImGui.SmallButton(swapLabel))
+                GameState.SwapPlayers();
+            if (ImGui.IsItemHovered())
+                ImGui.SetTooltip($"Make {game.Player2Name} roll first instead of {game.Player1Name}.");
+            ImGui.Spacing();
+        }
+        else if (game.FirstRollSwapped && game.Rolls.Count <= 1)
+        {
+            string note = $"↻ turn order auto-set: {game.Player1Name} rolls first";
+            ImGui.SetCursorPosX((avail2 - ImGui.CalcTextSize(note).X) * 0.5f);
+            ImGui.TextColored(Theme.Muted, note);
+            ImGui.Spacing();
+        }
+
         // Determine if the local player is the one who needs to roll
         var localName = Plugin.PlayerState.CharacterName ?? string.Empty;
         bool isMyTurn = localName.Length > 0 &&
@@ -473,22 +493,23 @@ public class MainWindow : Window
 
             // Pre-fill Player 1 once (the common case). Applied a single time so
             // backspacing the field actually sticks instead of refilling every frame.
-            if (!_hintApplied && newPlayer1.Trim().Length == 0)
+            if (!hintApplied && newPlayer1.Trim().Length == 0)
             {
                 newPlayer1   = hintPlayer;
-                _hintApplied = true;
+                hintApplied = true;
             }
             if (newStarting == Config.DefaultStartingNumber && hintMax != Config.DefaultStartingNumber)
                 newStarting = hintMax;
 
             // Explicit placement controls — fixes "they were actually the 2nd roller".
-            if (ImGui.SmallButton($"→ Player 1##hintP1"))
+            if (ImGui.SmallButton("→ Player 1##hintP1"))
                 newPlayer1 = hintPlayer;
             ImGui.SameLine();
-            if (ImGui.SmallButton($"→ Player 2##hintP2"))
+            if (ImGui.SmallButton("→ Player 2##hintP2"))
             {
+                var prev1  = newPlayer1.Trim();
                 newPlayer2 = hintPlayer;
-                if (string.Equals(newPlayer1.Trim(), hintPlayer, StringComparison.OrdinalIgnoreCase))
+                if (string.Equals(prev1, hintPlayer, StringComparison.OrdinalIgnoreCase))
                     newPlayer1 = string.Empty;
             }
             ImGui.SameLine();
@@ -550,13 +571,26 @@ public class MainWindow : Window
             GameState.StartGame(p1, p2, newStarting, bet, newVenue.Trim());
             ClearSoloRollOff();
             hintPlayer   = null;
-            _hintApplied = false;
+            hintApplied = false;
             newPlayer1   = newPlayer2 = string.Empty;
             newStarting = Config.DefaultStartingNumber;
             newBetStr   = "0";
             // newVenue intentionally kept — likely still at same venue
         }
         if (!canStart) ImGui.EndDisabled();
+        ImGui.SameLine();
+        if (ImGui.Button("Clear", new Vector2(90, 0)))
+        {
+            newPlayer1  = newPlayer2 = string.Empty;
+            newStarting = Config.DefaultStartingNumber;
+            newBetStr   = "0";
+            hintPlayer  = null;
+            hintApplied = false;
+            ClearSoloRollOff();
+            // Venue intentionally kept — still at the same venue.
+        }
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip("Reset players, starting number, bet, roll-off, and any detected roll.\nVenue is kept.");
 
         if (_soloRollOffFirstRoller != null && canStart)
         {
@@ -1045,6 +1079,29 @@ public class MainWindow : Window
             ImGui.TextColored(Theme.WinGreen, $"✓  {_soloRollOffFirstRoller} goes first!");
         else
             ImGui.TextColored(Theme.Muted, "Waiting for both players to roll...");
+
+        // Manual override — chat range can eat a /random 10, so let the host just
+        // click the winner instead of being stuck waiting for both rolls.
+        ImGui.Spacing();
+        ImGui.TextColored(Theme.Muted, "Missed a roll? Set who goes first:");
+
+        void Pick(string who)
+        {
+            if (who.Length == 0) return;
+            bool sel = string.Equals(_soloRollOffFirstRoller, who, StringComparison.OrdinalIgnoreCase);
+            ImGui.PushStyleColor(ImGuiCol.Button,
+                Theme.ToU32((sel ? Theme.WinGreen : Theme.Player1) with { W = sel ? 0.50f : 0.18f }));
+            if (ImGui.SmallButton($"{(sel ? "✓ " : "")}{who} first##solofirst{who}"))
+            {
+                _soloRollOffFirstRoller = who;
+                _soloRollOffTied        = false;
+            }
+            ImGui.PopStyleColor();
+        }
+
+        Pick(p1);
+        ImGui.SameLine();
+        Pick(p2);
 
         ImGui.Spacing();
         if (ImGui.SmallButton("Cancel Roll-off"))
